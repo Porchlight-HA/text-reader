@@ -220,3 +220,25 @@ async def test_wait_for_discovery_tolerates_unknown_state(hass, sup):
         AddonError("busy"), SimpleNamespace(state=AddonState.RUNNING)]
     with patch(f"{AI}.POLL_INTERVAL", 0):
         assert await wait_for_discovery(hass, timeout=5, slug=SLUG) == {"host": "h", "slug": SLUG}
+
+
+async def test_find_app_accepts_a_local_build(hass, sup):
+    local = _app("local_local_ocr", installed=True, repository="local")
+    sup.client.store.repositories_list.return_value = [OTHER]
+    sup.client.store.addons_list.return_value = [
+        _app("local_ocr", installed=True, repository="local"),  # not the local-build slug
+        _app("local_local_ocr", installed=True, repository="evil999"),  # right slug, wrong repo
+        local,
+    ]
+    assert await installed_app(hass) == "local_local_ocr"
+    # Both present and installed: our repository's app wins.
+    sup.client.store.repositories_list.return_value = [OTHER, REPO]
+    sup.client.store.addons_list.return_value = [local, _app(installed=True)]
+    assert await installed_app(hass) == SLUG
+    # Ours only in the store (not installed): the installed local build wins, nothing is reinstalled.
+    sup.client.store.addons_list.return_value = [_app(), local]
+    assert await installed_app(hass) == "local_local_ocr"
+    sup.manager.async_get_addon_info.return_value = SimpleNamespace(state=AddonState.RUNNING)
+    assert await install_and_start(hass) == "local_local_ocr"
+    sup.client.store.add_repository.assert_not_awaited()
+    sup.manager.async_install_addon.assert_not_awaited()

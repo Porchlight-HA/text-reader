@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 
 APP_NAME = "Local OCR"
 APP_SLUG = "local_ocr"
+LOCAL_BUILD_SLUG = f"local_{APP_SLUG}"
 APP_REPO_URL = "https://github.com/Porchlight-HA/local-ocr"
 DISCOVERY_SERVICE = "text_reader"
 
@@ -90,21 +91,24 @@ def _same_repo(url: str | None) -> bool:
 
 
 async def _find_app(client: Any) -> Any | None:
-    """The app's store entry from our repository (never a look-alike), preferring an installed one."""
+    """The app's store entry, never a look-alike: from our repository, or a local build.
+
+    A local build lives in Supervisor's "local" repository as `local_local_ocr` (ruling R11).
+    An installed app wins; between equals, the one from our repository wins.
+    """
     ours = {
         r.slug
         for r in await client.store.repositories_list()
         if _same_repo(r.source) or _same_repo(r.url)
     }
-    if not ours:
-        return None
     apps = [
         a
         for a in await client.store.addons_list()
-        if _is_app(a.slug) and a.repository in ours
+        if (_is_app(a.slug) and a.repository in ours)
+        or (a.slug == LOCAL_BUILD_SLUG and a.repository == "local")
     ]
-    installed = [a for a in apps if a.installed]
-    return (installed or apps or [None])[0]
+    apps.sort(key=lambda a: (not a.installed, a.repository not in ours))
+    return apps[0] if apps else None
 
 
 async def installed_app(hass: HomeAssistant) -> str | None:
