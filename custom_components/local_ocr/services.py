@@ -38,6 +38,8 @@ PRESETS = ["text", "envelope", "meter", "label"]
 SOURCES = ("image_entity", "camera_entity", "file_path", "media_content_id")
 # Reading every frame of an animation takes about one single read per frame (2.5-4 s each on a Pi 4).
 ALL_FRAMES_TIMEOUT = 180
+# The server refuses images above 10 MB; never read more than that (plus one byte to tell) into memory.
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 # Server rejection codes with their own plain-language message; other codes use image_rejected.
 REJECTION_KEYS = ("too_large", "unsupported_image", "bad_request", "unsupported_lang")
 
@@ -87,6 +89,23 @@ def _get_entry(hass: HomeAssistant, entry_id: str | None) -> LocalOcrConfigEntry
     return loaded[0]
 
 
+class _TooLarge(Exception):
+    """The file is larger than MAX_IMAGE_BYTES."""
+
+
+def _read_capped(path: str | Path) -> bytes:
+    """Read a file in the executor, refusing anything larger than the server accepts."""
+    with open(path, "rb") as f:
+        data = f.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise _TooLarge
+    return data
+
+
+def _too_large() -> HomeAssistantError:
+    return HomeAssistantError(translation_domain=DOMAIN, translation_key="too_large")
+
+
 def _no_image(entity_id: str) -> HomeAssistantError:
     return HomeAssistantError(
         translation_domain=DOMAIN,
@@ -113,16 +132,29 @@ async def _load_image(hass: HomeAssistant, call_data: dict[str, Any]) -> bytes:
             raise _no_image(entity_id) from err
 
     if (path := call_data.get("file_path")) is not None:
-        if not hass.config.is_allowed_path(path):
+        # is_allowed_path resolves symlinks on disk, so it runs in the executor too.
+        if not await hass.async_add_executor_job(hass.config.is_allowed_path, path):
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="path_not_allowed",
                 translation_placeholders={"path": path},
             )
         try:
-            return await hass.async_add_executor_job(Path(path).read_bytes)
+            return await hass.async_add_executor_job(_read_capped, path)
+        except _TooLarge:
+            raise _too_large() from None
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError) as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="file_not_found",
+                translation_placeholders={"path": path},
+            ) from err
         except OSError as err:
-            raise _no_image(path) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="file_unreadable",
+                translation_placeholders={"path": path},
+            ) from err
 
     media_id = call_data["media_content_id"]
     from homeassistant.components import media_source
@@ -133,7 +165,9 @@ async def _load_image(hass: HomeAssistant, call_data: dict[str, Any]) -> bytes:
         raise _no_image(media_id) from err
     if (local := getattr(resolved, "path", None)) is not None:
         try:
-            return await hass.async_add_executor_job(Path(local).read_bytes)
+            return await hass.async_add_executor_job(_read_capped, local)
+        except _TooLarge:
+            raise _too_large() from None
         except OSError as err:
             raise _no_image(media_id) from err
     url = resolved.url
@@ -142,9 +176,12 @@ async def _load_image(hass: HomeAssistant, call_data: dict[str, Any]) -> bytes:
             url = f"{get_url(hass)}{url}"
         async with async_get_clientsession(hass).get(url) as resp:
             resp.raise_for_status()
-            return await resp.read()
+            data = await resp.content.read(MAX_IMAGE_BYTES + 1)
     except Exception as err:  # noqa: BLE001 - never echo the URL
         raise _no_image(media_id) from err
+    if len(data) > MAX_IMAGE_BYTES:
+        raise _too_large()
+    return data
 
 
 def _image_size(data: bytes) -> tuple[int, int]:
@@ -315,7 +352,11 @@ async def _read_with_retry(
                 translation_placeholders={"message": str(err)},
             ) from None
         except LocalOcrError as err:
-            raise HomeAssistantError(str(err)) from None
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="unexpected_error",
+                translation_placeholders={"error": type(err).__name__},
+            ) from None
 
 
 def async_register_services(hass: HomeAssistant) -> None:

@@ -170,6 +170,11 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         self._managed = False
         self._needs_token = discovery_info.properties.get("auth") == "1"
         await self.async_set_unique_id(DOMAIN)
+        entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN)
+        if entry is not None and entry.data.get("managed"):
+            # The App's entry follows Supervisor discovery; a standalone server seen on the LAN
+            # (or the App's own port, if published) must not repoint it.
+            return self.async_abort(reason="already_configured")
         self._abort_if_unique_id_configured(updates={"url": self._url})
         return await self.async_step_zeroconf_confirm()
 

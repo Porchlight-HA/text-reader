@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 )
 
 from custom_components.local_ocr.api import (
+    CONNECT_TIMEOUT,
     Busy,
     CannotConnect,
     ImageRejected,
@@ -177,13 +178,15 @@ async def test_read_timeout_override(hass):
             return False
 
     def fake_request(method, url, **kw):
-        seen.append(kw["timeout"].total)
+        seen.append((kw["timeout"].total, kw["timeout"].sock_connect))
         return _Resp()
 
     with patch.object(session, "request", fake_request):
         await client.read(b"x")
         await client.read(b"x", timeout=180)
-    assert seen == [30, 180]
+        await client.read(b"x", timeout=5)
+    # The connect phase is capped separately, so an unreachable host is "can't connect", not "timeout".
+    assert seen == [(30, CONNECT_TIMEOUT), (180, CONNECT_TIMEOUT), (5, 5)]
 
 
 async def test_health_memory(hass, aioclient_mock):

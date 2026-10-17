@@ -3,15 +3,36 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from homeassistant.components.repairs import (
     ConfirmRepairFlow,
     RepairsFlow,
     RepairsFlowResult,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import HassJob, HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 
 _LOGGER = logging.getLogger(__name__)
+
+# Supervisor reports the App started before its server listens (the model is not loaded at start, but s6
+# and Python still take a few seconds). Poll again after this long instead of waiting for the next 60 s poll.
+REFRESH_AFTER_START = 15
+
+
+def _schedule_refresh(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    @callback
+    def _refresh(_now: datetime) -> None:
+        if entry.state is not ConfigEntryState.LOADED:
+            return
+        coordinator = entry.runtime_data.coordinator
+        if coordinator is not None:
+            hass.async_create_task(coordinator.async_request_refresh())
+
+    entry.async_on_unload(
+        async_call_later(hass, REFRESH_AFTER_START, HassJob(_refresh, cancel_on_shutdown=True))
+    )
 
 
 class StartAppRepairFlow(ConfirmRepairFlow):
@@ -40,8 +61,8 @@ class StartAppRepairFlow(ConfirmRepairFlow):
             await manager.async_start_addon()
         except AddonError:
             return self.async_abort(reason="cannot_start")
-        if entry is not None and entry.runtime_data.coordinator is not None:
-            await entry.runtime_data.coordinator.async_request_refresh()
+        if entry is not None:
+            _schedule_refresh(self.hass, entry)
         return self.async_create_entry(data={})
 
 

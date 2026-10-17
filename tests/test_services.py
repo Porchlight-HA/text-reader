@@ -370,3 +370,63 @@ def _field(form, name):
         if opts.get("name") == name:
             return value
     raise AssertionError(name)
+
+
+async def test_missing_file_says_so(hass, entry, tmp_path):
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, file_path=str(tmp_path / "nope.png"))
+    assert err.value.translation_key == "file_not_found"
+    assert err.value.translation_placeholders == {"path": str(tmp_path / "nope.png")}
+
+
+async def test_directory_is_not_a_file(hass, entry, tmp_path):
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, file_path=str(tmp_path))
+    assert err.value.translation_key == "file_not_found"
+
+
+async def test_oversized_file_not_read_or_sent(hass, entry, aioclient_mock, tmp_path):
+    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+
+    p = tmp_path / "big.png"
+    p.write_bytes(b"\0" * (MAX_IMAGE_BYTES + 1))
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "too_large"
+    assert aioclient_mock.call_count == 0
+
+
+async def test_file_at_the_cap_is_sent(hass, entry, aioclient_mock, tmp_path):
+    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+
+    p = tmp_path / "edge.png"
+    p.write_bytes(b"\0" * MAX_IMAGE_BYTES)
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    assert await _call(hass, file_path=str(p)) == RESULT
+
+
+async def test_oversized_remote_media_rejected(hass, entry, aioclient_mock):
+    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+
+    aioclient_mock.get("http://media.test/big.png", content=b"\0" * (MAX_IMAGE_BYTES + 1))
+    resolved = MagicMock(path=None, url="http://media.test/big.png")
+    with patch("homeassistant.components.media_source.async_resolve_media",
+               AsyncMock(return_value=resolved)), pytest.raises(HomeAssistantError) as err:
+        await _call(hass, media_content_id="media-source://x/big.png")
+    assert err.value.translation_key == "too_large"
+
+
+async def test_unexpected_client_error_is_translated(hass, entry, tmp_path):
+    from custom_components.local_ocr.api import LocalOcrError
+
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with patch.object(LocalOcrClient, "read", AsyncMock(side_effect=LocalOcrError("boom"))), \
+            pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "unexpected_error"
+    assert err.value.translation_placeholders == {"error": "LocalOcrError"}

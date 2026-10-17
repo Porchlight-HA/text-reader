@@ -404,3 +404,36 @@ async def test_options_change_reloads_entry(hass, aioclient_mock):
     assert entry.state is config_entries.ConfigEntryState.LOADED
     assert entry.runtime_data.client is not old_client
     assert entry.runtime_data.client._timeout.total == 75
+
+
+async def test_zeroconf_never_repoints_a_managed_entry(hass):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+                            data={"url": "http://local-ocr:8738", "token": TOKEN, "managed": True,
+                                  "slug": "local_ocr"})
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=zc_info("0"))
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "already_configured"
+    assert entry.data["url"] == "http://local-ocr:8738"
+
+
+async def test_zeroconf_updates_a_standalone_entry_url(hass):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+                            data={"url": "http://192.168.1.4:8738", "token": None, "managed": False})
+    entry.add_to_hass(hass)
+    with patch("custom_components.local_ocr.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=zc_info("0"))
+        await hass.async_block_till_done()
+    assert result["reason"] == "already_configured"
+    assert entry.data["url"] == "http://192.168.1.5:8738"
+
+
+def test_every_form_field_has_a_description():
+    import json
+    from pathlib import Path
+
+    strings = json.loads((Path(__file__).parents[1] / "custom_components/local_ocr/strings.json").read_text())
+    steps = [*strings["config"]["step"].values(), *strings["options"]["step"].values()]
+    for step in steps:
+        assert set(step.get("data", {})) == set(step.get("data_description", {})), step.get("title")
