@@ -346,7 +346,7 @@ async def test_ai_only_entry_sets_up_and_unloads(hass):
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.client is None
-    assert entry.runtime_data.coordinator is None
+    assert entry.runtime_data.coordinator is not None  # AI-only entries get status entities (0.3)
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED
 

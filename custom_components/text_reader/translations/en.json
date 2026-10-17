@@ -318,6 +318,57 @@
     "low_memory": {
       "title": "The Local OCR app is low on memory",
       "description": "The Local OCR app ran out of memory while reading images. Close other apps, or lower max_side in the Local OCR app's options."
+    },
+    "ai_entity_missing": {
+      "title": "Your AI assistant is gone",
+      "description": "The AI assistant Text Reader used ({entity}) is gone. Pick another one.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Pick another AI assistant",
+            "description": "The AI assistant Text Reader used ({entity}) is gone. Pick another one.",
+            "data": {
+              "ai_entity": "AI assistant",
+              "privacy_ack": "I understand images are sent to this assistant, and cloud assistants can see them."
+            },
+            "data_description": {
+              "ai_entity": "Only assistants that can read images are listed."
+            }
+          }
+        },
+        "error": {
+          "privacy_ack_required": "Confirm that you understand images are sent to this assistant.",
+          "ai_entity_invalid": "That assistant can't read images. Pick another one."
+        },
+        "abort": {
+          "no_ai_entities": "No AI assistant that can read images is set up. Add one (for example Ollama with a vision model), then try again.",
+          "entry_not_found": "Text Reader isn't set up any more."
+        }
+      }
+    },
+    "ai_entity_unavailable": {
+      "title": "Your AI assistant isn't responding",
+      "description": "Your AI assistant isn't responding. Text Reader is using on-device reading only until it's back."
+    },
+    "ai_entity_unavailable_only": {
+      "title": "Your AI assistant isn't responding",
+      "description": "Your AI assistant isn't responding. Text Reader can't read images until it's back."
+    },
+    "local_unsupported_here": {
+      "title": "This device can't run the Local OCR app",
+      "description": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Switch Text Reader to your AI assistant?",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Switch to your AI assistant",
+            "description": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Switch Text Reader to your AI assistant?"
+          }
+        },
+        "abort": {
+          "no_ai_assistant": "Set up an AI assistant first, then choose it in Text Reader's options.",
+          "entry_not_found": "Text Reader isn't set up any more."
+        }
+      }
     }
   }
 }

@@ -257,3 +257,179 @@ async def test_read_401_starts_reauth(hass, aioclient_mock, tmp_path):
     assert err.value.translation_key == "auth_failed"
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert any(f["context"]["source"] == "reauth" for f in flows)
+
+
+# --- backend-aware status and repairs (0.3) ---------------------------------
+
+AI = "ai_task.helper"
+
+
+def _ai_entity(hass, state="idle"):
+    er.async_get(hass).async_get_or_create(
+        "ai_task", "test", "helper", suggested_object_id="helper"
+    )
+    hass.states.async_set(AI, state)
+
+
+async def _setup_entry(hass, mock, data, options=None):
+    mock.get(f"{URL}/v1/info", json=INFO)
+    mock.get(f"{URL}/v1/health", json=HEALTH)
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader", data=data, options=options or {}
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+def _remove_ai(hass):
+    er.async_get(hass).async_remove(AI)
+    hass.states.async_remove(AI)
+
+
+async def test_ai_entity_removed_raises_missing_and_auto_keeps_local(hass, aioclient_mock):
+    _ai_entity(hass)
+    entry = await _setup_entry(
+        hass, aioclient_mock, {"url": URL, "token": "t"},
+        {"backend": "auto", "ai_entity": AI},
+    )
+    assert _issue(hass, "ai_entity_missing") is None
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
+    _remove_ai(hass)
+    await _poll(hass)
+    issue = _issue(hass, "ai_entity_missing")
+    assert issue is not None and issue.is_fixable is True
+    assert issue.translation_placeholders == {"entity": AI}
+    assert issue.data == {"entry_id": entry.entry_id}
+    # auto keeps polling the App, but the status is on only when every backend is healthy
+    assert aioclient_mock.mock_calls[-1][1].path == "/v1/health"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "off"
+    _ai_entity(hass)
+    await _poll(hass)
+    assert _issue(hass, "ai_entity_missing") is None
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
+
+
+async def test_ai_unavailable_three_polls(hass, aioclient_mock):
+    _ai_entity(hass)
+    await _setup_entry(
+        hass, aioclient_mock, {"url": URL, "token": "t"},
+        {"backend": "auto", "ai_entity": AI},
+    )
+    hass.states.async_set(AI, "unavailable")
+    await _poll(hass, 2)
+    assert _issue(hass, "ai_entity_unavailable") is None
+    await _poll(hass)
+    issue = _issue(hass, "ai_entity_unavailable")
+    assert issue is not None and issue.is_fixable is False
+    assert issue.translation_key == "ai_entity_unavailable"
+    assert issue.translation_placeholders == {"entity": AI}
+    hass.states.async_set(AI, "idle")
+    await _poll(hass)
+    assert _issue(hass, "ai_entity_unavailable") is None
+
+
+async def test_ai_unavailable_ai_only_uses_its_own_copy_key(hass, aioclient_mock):
+    _ai_entity(hass)
+    await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    hass.states.async_set(AI, "unavailable")
+    await _poll(hass, 3)
+    assert _issue(hass, "ai_entity_unavailable").translation_key == "ai_entity_unavailable_only"
+
+
+async def test_ai_only_entry_has_no_local_polling(hass, aioclient_mock):
+    _ai_entity(hass)
+    entry = await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    assert entry.runtime_data.client is None
+    assert entry.runtime_data.coordinator is not None
+    await _poll(hass, 2)
+    assert aioclient_mock.call_count == 0
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
+    assert hass.states.get("sensor.text_reader_last_duration") is None
+    ent = er.async_get(hass)
+    assert ent.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_last_duration") is None
+    hass.states.async_set(AI, "unavailable")
+    await _poll(hass)
+    assert hass.states.get("binary_sensor.text_reader_status").state == "off"
+
+
+async def test_local_issues_not_raised_for_ai_only(hass, aioclient_mock):
+    _ai_entity(hass)
+    await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    for issue_id in ("app_not_running", "app_outdated", "model_failed", "low_memory"):
+        assert _issue(hass, issue_id) is None
+
+
+async def test_local_unsupported_issue_and_switch_fix(hass, aioclient_mock):
+    from custom_components.text_reader.repairs import async_create_fix_flow
+
+    _ai_entity(hass)
+    with (
+        patch("custom_components.text_reader.is_hassio", return_value=True),
+        patch(
+            "custom_components.text_reader.local_supported",
+            return_value=(False, "arch"),
+        ),
+    ):
+        entry = await _setup_entry(
+            hass, aioclient_mock, {"url": URL, "token": "t"},
+            {"backend": "local", "ai_entity": AI},
+        )
+    issue = _issue(hass, "local_unsupported_here")
+    assert issue is not None and issue.is_fixable is True
+    flow = await async_create_fix_flow(hass, "local_unsupported_here", issue.data)
+    flow.hass = hass
+    flow.issue_id = "local_unsupported_here"
+    flow.handler = DOMAIN
+    first = await flow.async_step_init()
+    assert first["type"].value == "form"
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        done = await flow.async_step_confirm({})
+    assert done["type"].value == "create_entry"
+    assert entry.options["backend"] == "ai_task"
+    reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_local_unsupported_not_checked_off_supervisor(hass, aioclient_mock):
+    with (
+        patch("custom_components.text_reader.is_hassio", return_value=False),
+        patch(
+            "custom_components.text_reader.local_supported", return_value=(False, "arch")
+        ) as check,
+    ):
+        await _setup_entry(hass, aioclient_mock, {"url": URL, "token": "t"})
+    check.assert_not_called()
+    assert _issue(hass, "local_unsupported_here") is None
+
+
+async def test_status_sensor_reflects_all_backends(hass, aioclient_mock):
+    _ai_entity(hass)
+    await _setup_entry(
+        hass, aioclient_mock, {"url": URL, "token": "t"},
+        {"backend": "auto", "ai_entity": AI},
+    )
+    sensor = "binary_sensor.text_reader_status"
+    assert hass.states.get(sensor).state == "on"
+    hass.states.async_set(AI, "unavailable")
+    await _poll(hass)
+    assert hass.states.get(sensor).state == "off"
+    hass.states.async_set(AI, "idle")
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/v1/health", exc=TimeoutError)
+    await _poll(hass)
+    assert hass.states.get(sensor).state == "off"
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/v1/health", json=HEALTH)
+    await _poll(hass)
+    assert hass.states.get(sensor).state == "on"
+
+
+async def test_unload_clears_ai_issues(hass, aioclient_mock):
+    _ai_entity(hass)
+    entry = await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    _remove_ai(hass)
+    await _poll(hass)
+    assert _issue(hass, "ai_entity_missing")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert _issue(hass, "ai_entity_missing") is None

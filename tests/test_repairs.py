@@ -105,3 +105,57 @@ async def test_delayed_refresh_skipped_after_unload(hass):
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=REFRESH_AFTER_START + 1))
     await hass.async_block_till_done()
     coordinator.async_request_refresh.assert_not_awaited()
+
+
+# --- 0.3 flows ---------------------------------------------------------------
+
+from custom_components.text_reader.repairs import AiEntityMissingFlow  # noqa: E402
+
+
+def _flow(hass, issue_id, entry):
+    flow = AiEntityMissingFlow(entry.entry_id) if issue_id == "ai_entity_missing" else None
+    assert flow is not None
+    flow.hass = hass
+    flow.issue_id = issue_id
+    flow.handler = DOMAIN
+    return flow
+
+
+async def test_ai_entity_missing_flow_updates_options_and_reloads(hass):
+    entry = _entry(hass)
+    entry.runtime_data = type("R", (), {"coordinator": None})()
+    flow = _flow(hass, "ai_entity_missing", entry)
+    with patch(
+        "custom_components.text_reader.repairs.eligible_entities", return_value=["ai_task.new"]
+    ), patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        first = await flow.async_step_init()
+        assert first["type"] is FlowResultType.FORM
+        no_ack = await flow.async_step_init({"ai_entity": "ai_task.new", "privacy_ack": False})
+        assert no_ack["errors"] == {"base": "privacy_ack_required"}
+        bad = await flow.async_step_init({"ai_entity": "ai_task.other", "privacy_ack": True})
+        assert bad["errors"] == {"base": "ai_entity_invalid"}
+        done = await flow.async_step_init({"ai_entity": "ai_task.new", "privacy_ack": True})
+    assert done["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["ai_entity"] == "ai_task.new"
+    reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_ai_entity_missing_flow_aborts_without_candidates(hass):
+    entry = _entry(hass)
+    flow = _flow(hass, "ai_entity_missing", entry)
+    with patch("custom_components.text_reader.repairs.eligible_entities", return_value=[]):
+        result = await flow.async_step_init()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_ai_entities"
+
+
+async def test_local_unsupported_without_ai_entity_just_explains(hass):
+    entry = _entry(hass)
+    flow = await async_create_fix_flow(hass, "local_unsupported_here", {"entry_id": entry.entry_id})
+    flow.hass = hass
+    flow.issue_id = "local_unsupported_here"
+    flow.handler = DOMAIN
+    result = await flow.async_step_init()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_ai_assistant"
+    assert "backend" not in entry.options

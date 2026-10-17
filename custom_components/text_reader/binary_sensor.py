@@ -19,7 +19,7 @@ async def async_setup_entry(
 
 
 class TextReaderStatusSensor(TextReaderEntity, BinarySensorEntity):
-    """On when the server answers and reports ok."""
+    """On when every backend in use is healthy: the App reports ok, the AI assistant is available."""
 
     _attr_translation_key = "status"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
@@ -30,5 +30,4 @@ class TextReaderStatusSensor(TextReaderEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        health = self.coordinator.data.health
-        return health is not None and health.status == "ok"
+        return self.coordinator.data.healthy
