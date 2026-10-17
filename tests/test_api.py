@@ -63,6 +63,14 @@ async def test_read_ok_sends_form_and_auth(hass, aioclient_mock):
     assert result["text"] == "hi"
     method, url, data, headers = aioclient_mock.mock_calls[0]
     assert headers["Authorization"] == "Bearer tok"
+    fields = {
+        opts["name"]: value for opts, _hdrs, value in data._fields
+    }
+    assert fields["image"] == b"img"
+    assert fields["preset"] == "mail"
+    assert fields["min_confidence"] == "0.7"
+    assert fields["region"] == "1,2,3,4"
+    assert fields["all_frames"] == "true"
 
 
 async def test_no_auth_header_without_token(hass, aioclient_mock):
@@ -128,6 +136,49 @@ async def test_timeout(hass, aioclient_mock):
     aioclient_mock.get(f"{URL}/v1/health", exc=TimeoutError())
     with pytest.raises(CannotConnect):
         await _client(hass).health()
+
+
+async def test_info_missing_required_keys(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/info", json={"version": "1"})
+    with pytest.raises(ServerError, match="invalid info"):
+        await _client(hass).info()
+
+
+async def test_health_missing_keys(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/health", json={})
+    with pytest.raises(ServerError, match="invalid health"):
+        await _client(hass).health()
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [("nan", 5.0), ("inf", 5.0), ("-3", 0.0), ("abc", 5.0), ("7", 7.0)],
+)
+async def test_busy_retry_after_sanitised(hass, aioclient_mock, header, expected):
+    aioclient_mock.post(
+        f"{URL}/v1/read",
+        status=503,
+        json={"error": "busy", "message": "m"},
+        headers={"Retry-After": header},
+    )
+    with pytest.raises(Busy) as err:
+        await _client(hass).read(b"x")
+    assert err.value.retry_after == expected
+
+
+async def test_payload_error_is_cannot_connect(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/info", exc=aiohttp.ClientPayloadError("cut"))
+    with pytest.raises(CannotConnect):
+        await _client(hass).info()
+
+
+async def test_invalid_header_never_leaks_token(hass, aioclient_mock):
+    secret = "sekrit\ntoken"
+    aioclient_mock.get(f"{URL}/v1/info", exc=ValueError(f"bad header {secret}"))
+    with pytest.raises(Unauthorized) as err:
+        await LocalOcrClient(async_get_clientsession(hass), URL, secret).info()
+    assert "sekrit" not in str(err.value)
+    assert "sekrit" not in repr(err.value)
 
 
 def test_api_module_has_no_ha_imports():

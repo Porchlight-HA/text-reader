@@ -96,9 +96,12 @@ class LocalOcrClient:
                 status = resp.status
                 try:
                     body = await resp.json(content_type=None)
-                except (aiohttp.ClientError, ValueError):
+                except (aiohttp.ContentTypeError, ValueError):
                     body = None
                 retry = resp.headers.get("Retry-After")
+        except ValueError as err:
+            # aiohttp rejects invalid header values; never echo the token.
+            raise Unauthorized("invalid token format") from None
         except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as err:
             raise CannotConnect(str(err) or type(err).__name__) from err
 
@@ -118,19 +121,28 @@ class LocalOcrClient:
                 delay = float(retry) if retry is not None else 5.0
             except ValueError:
                 delay = 5.0
-            raise Busy(delay)
+            if delay != delay or delay in (float("inf"), float("-inf")):  # nan/inf
+                delay = 5.0
+            raise Busy(max(delay, 0.0))
         raise ServerError(message or code or f"HTTP {status}")
 
     async def health(self) -> Health:
         data = await self._request("GET", "/v1/health", auth=False)
-        return Health(
-            status=data.get("status", ""),
-            model_state=data.get("model_state", ""),
-            detail=data.get("detail"),
-        )
+        try:
+            return Health(
+                status=data["status"],
+                model_state=data["model_state"],
+                detail=data.get("detail"),
+            )
+        except KeyError as err:
+            raise ServerError("invalid health response") from err
 
     async def info(self) -> Info:
-        return Info.from_dict(await self._request("GET", "/v1/info"))
+        data = await self._request("GET", "/v1/info")
+        try:
+            return Info.from_dict(data)
+        except (TypeError, KeyError) as err:
+            raise ServerError("invalid info response") from err
 
     async def read(
         self,
