@@ -18,10 +18,30 @@ if TYPE_CHECKING:
 class TextReaderRuntimeData:
     """Per-entry runtime state."""
 
-    client: LocalOcrClient
+    client: LocalOcrClient | None
     coordinator: TextReaderCoordinator | None = None
     recent: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
     last_duration_ms: int | None = None
 
 
 type TextReaderConfigEntry = ConfigEntry[TextReaderRuntimeData]
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Backend settings resolved from options, then entry data, then defaults."""
+
+    backend: str
+    ai_entity: str | None
+    auto_threshold: float
+
+
+def settings(entry: ConfigEntry[Any]) -> Settings:
+    """Resolve the effective settings for an entry."""
+    data, options = entry.data, entry.options
+    default_backend = "local" if data.get("url") else "ai_task"
+    return Settings(
+        backend=options.get("backend", data.get("backend", default_backend)),
+        ai_entity=options.get("ai_entity", data.get("ai_entity")),
+        auto_threshold=float(options.get("auto_threshold", 0.8)),
+    )

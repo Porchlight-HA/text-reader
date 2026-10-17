@@ -58,6 +58,7 @@ class TextReaderCoordinator(DataUpdateCoordinator[Status]):
 
     async def _async_update_data(self) -> Status:
         client = self.config_entry.runtime_data.client
+        assert client is not None  # the coordinator only exists for entries with a url
         health: Health | None = None
         try:
             if self._info is None or self._polls % INFO_EVERY == 0:

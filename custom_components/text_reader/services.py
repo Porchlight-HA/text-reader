@@ -296,6 +296,7 @@ async def _read_with_retry(
     all_frames: bool,
 ) -> ServiceResponse:
     client = entry.runtime_data.client
+    assert client is not None  # Task 5 routes through router.route_read
     start = monotonic()
     timed_out = HomeAssistantError(
         translation_domain=DOMAIN,

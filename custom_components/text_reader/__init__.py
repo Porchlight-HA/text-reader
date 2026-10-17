@@ -29,6 +29,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -> bool:
     """Set up Text Reader from a config entry."""
+    if not entry.data.get("url"):
+        # AI-only entry: no local App to poll, so no coordinator or status entities.
+        entry.runtime_data = TextReaderRuntimeData(client=None)
+        return True
     client = LocalOcrClient(
         async_get_clientsession(hass),
         entry.data["url"],
@@ -45,8 +49,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -
 
 async def async_unload_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -> bool:
     """Unload a config entry."""
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     runtime = getattr(entry, "runtime_data", None)
+    if runtime is not None and runtime.coordinator is None:
+        return True  # AI-only entry: no platforms were forwarded
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and runtime is not None and runtime.coordinator is not None:
         runtime.coordinator.clear_issues()
     return unloaded
