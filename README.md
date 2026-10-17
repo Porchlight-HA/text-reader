@@ -33,6 +33,7 @@ A 1 GB board or a 32-bit install can't run the App and should use the AI-only ch
 - Calls with `backend: local` never use the assistant. A call with `backend: ai_task` sends the image to the assistant whatever the default is.
 - **Ollama is the recommended choice if you want AI that stays local**: it runs on your own machine, so the images never leave your network.
 - Images and recognised text are never stored or logged by Text Reader. Images sent to an assistant are written to a private temporary folder (`.text_reader_tmp` in your config folder, owner-only) and deleted as soon as the call ends.
+- Assistant integrations themselves may log their replies when they hit errors (for example Ollama and OpenAI log unparseable replies), which can include recognised text.
 - Diagnostics contain no text and no image data.
 - **Automation traces keep the response.** See Privacy details below.
 
@@ -141,7 +142,7 @@ Text Reader implements this contract. Any other integration can implement it too
 - `text` has one line per visual line of the image, top to bottom. Blocks on the same line (same `line` number) are joined with a single space; lines are separated by `\n`.
 - Consumers must work with `text` alone and use `fields` when present.
 
-With `all_frames: true` the response is different: `{"frames": [<one result per frame, as above>], "text": "<each frame's text, joined with \n\n>"}`. There are no other top-level fields; `width`, `blocks`, `fields` and so on are inside each frame. Reading every frame takes about one read per frame, so the action allows it at least 180 s.
+With `all_frames: true` the response is different: `{"frames": [<one result per frame, as above>], "text": "<each frame's text, joined with \n\n>"}`, plus Text Reader's `routed` and `confidence` (below). There are no other top-level fields, whichever reader answered; `width`, `blocks`, `fields` and so on are inside each frame. Reading every frame takes about one read per frame, so the action allows it at least 180 s.
 
 
 ### `routed`, `confidence` and AI results
@@ -153,7 +154,7 @@ Text Reader adds two fields to the v1 result (consumers that ignore them are una
 | `routed` | Who read the image: `"local"` (the App), `"ai_task"` (the assistant) or `"local→ai_task"` (the App was tried and the assistant took over, in "both" mode). |
 | `confidence` | The mean confidence of the local blocks, or `null` when an assistant read it (also `null` if any frame of an `all_frames` read went to the assistant). |
 
-An assistant's result has `engine: "ai_task:<entity_id>"`, `model: null`, **no boxes** (`blocks` is empty) and `confidence: null`. Presets still work: the assistant is asked for the same `fields` (addressee, tracking numbers, meter value). With `all_frames` the assistant result has no top-level `fields`, like the local one. The instructions sent to the assistant are fixed and versioned (diagnostics shows `ai_prompt_version`); they can't be edited.
+An assistant's result has `engine: "ai_task:<entity_id>"`, `model: null`, **no boxes** (`blocks` is empty) and `confidence: null`. Presets still work: the assistant is asked for the same `fields` (addressee, tracking numbers, meter value), and they have the same shape as the App's: `text` has `fields: null`; an envelope's `indicia` is always an empty list (the assistant isn't asked for it); a meter's `fields.confidence` is `null`; an address block that wasn't found is `null`. `width` and `height` are the image's size after EXIF rotation, before any `region` crop, as with the App. Text Reader sends the assistant one frame (the first, unless `all_frames`), rotated upright and cropped to `region`, as PNG (JPEG for photos over 2 MP), or the original file when it is already a single-frame JPEG, PNG or WEBP that needs neither. Images over 40 megapixels are rejected, as by the App. Each assistant call may take at least 120 s (or the timeout option, if longer); after that it counts as unavailable, and in "both" mode the local result is kept. The instructions sent to the assistant are fixed and versioned (diagnostics shows `ai_prompt_version`); they can't be edited.
 
 ## Repairs
 
@@ -171,7 +172,7 @@ Repairs appear under Settings, System, Repairs and clear themselves when the pro
 
 ## Privacy details
 
-Text Reader never stores or logs images or recognised text. The App writes only its access token to disk. Logs contain sizes and timings, never content. Diagnostics (Settings, Devices and services, Text Reader, Download diagnostics) contain the backend, the AI entity id, the auto threshold, the prompt version, the App's version and health, and the last 20 requests as timing, preset, the requested `backend`, the actual `routed`, image size, block count and error class. They contain **no text**, and the token is redacted.
+Text Reader never stores or logs images or recognised text. The App writes only its access token to disk. Text Reader's logs contain sizes and timings, never content. Assistant integrations themselves may log their replies when they hit errors (for example Ollama and OpenAI log unparseable replies), which can include recognised text. Diagnostics (Settings, Devices and services, Text Reader, Download diagnostics) contain the backend, the AI entity id, the auto threshold, the prompt version, the App's version and health, and the last 20 requests as timing, preset, the requested `backend`, the actual `routed`, image size, block count and error class. They contain **no text**, and the token is redacted.
 
 **Automation traces keep the response.** Home Assistant stores the last traces of each automation and script in `.storage/trace.saved_traces`, including `response_variable` values, so recognised text ends up there. For automations that read sensitive images (mail, for example), turn stored traces off for that automation:
 
