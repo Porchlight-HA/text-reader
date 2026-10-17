@@ -112,11 +112,10 @@ async def test_delayed_refresh_skipped_after_unload(hass):
 from custom_components.text_reader.repairs import AiEntityMissingFlow  # noqa: E402
 
 
-def _flow(hass, issue_id, entry):
-    flow = AiEntityMissingFlow(entry.entry_id) if issue_id == "ai_entity_missing" else None
-    assert flow is not None
+def _flow(hass, entry):
+    flow = AiEntityMissingFlow(entry.entry_id)
     flow.hass = hass
-    flow.issue_id = issue_id
+    flow.issue_id = "ai_entity_missing"
     flow.handler = DOMAIN
     return flow
 
@@ -124,7 +123,7 @@ def _flow(hass, issue_id, entry):
 async def test_ai_entity_missing_flow_updates_options_and_reloads(hass):
     entry = _entry(hass)
     entry.runtime_data = type("R", (), {"coordinator": None})()
-    flow = _flow(hass, "ai_entity_missing", entry)
+    flow = _flow(hass, entry)
     with patch(
         "custom_components.text_reader.repairs.eligible_entities", return_value=["ai_task.new"]
     ), patch.object(hass.config_entries, "async_schedule_reload") as reload:
@@ -142,7 +141,7 @@ async def test_ai_entity_missing_flow_updates_options_and_reloads(hass):
 
 async def test_ai_entity_missing_flow_aborts_without_candidates(hass):
     entry = _entry(hass)
-    flow = _flow(hass, "ai_entity_missing", entry)
+    flow = _flow(hass, entry)
     with patch("custom_components.text_reader.repairs.eligible_entities", return_value=[]):
         result = await flow.async_step_init()
     assert result["type"] is FlowResultType.ABORT

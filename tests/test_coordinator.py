@@ -433,3 +433,117 @@ async def test_unload_clears_ai_issues(hass, aioclient_mock):
     assert _issue(hass, "ai_entity_missing")
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert _issue(hass, "ai_entity_missing") is None
+
+
+async def test_unload_clears_unavailable_and_unsupported_issues(hass, aioclient_mock):
+    _ai_entity(hass)
+    with (
+        patch("custom_components.text_reader.is_hassio", return_value=True),
+        patch("custom_components.text_reader.local_supported", return_value=(False, "memory")),
+    ):
+        entry = await _setup_entry(
+            hass, aioclient_mock, {"url": URL, "token": "t"},
+            {"backend": "auto", "ai_entity": AI},
+        )
+    hass.states.async_set(AI, "unavailable")
+    await _poll(hass, 3)
+    assert _issue(hass, "ai_entity_unavailable")
+    assert _issue(hass, "local_unsupported_here")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert _issue(hass, "ai_entity_unavailable") is None
+    assert _issue(hass, "local_unsupported_here") is None
+
+
+# --- through HA's repairs flow manager -----------------------------------------
+
+
+async def _manager(hass):
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, "repairs", {})
+    return hass.data["repairs"]["flow_manager"]
+
+
+async def _issue_texts(hass, issue_id):
+    from homeassistant.helpers.translation import async_get_translations
+
+    tr = await async_get_translations(hass, "en", "issues", [DOMAIN])
+    return {k: v for k, v in tr.items() if f".{issue_id}." in k}
+
+
+async def test_ai_entity_missing_through_flow_manager(hass, aioclient_mock):
+    mgr = await _manager(hass)
+    _ai_entity(hass)
+    entry = await _setup_entry(
+        hass, aioclient_mock, {"url": URL, "token": "t"}, {"backend": "auto", "ai_entity": AI}
+    )
+    _remove_ai(hass)
+    await _poll(hass)
+    assert _issue(hass, "ai_entity_missing")
+    texts = await _issue_texts(hass, "ai_entity_missing")
+    base = f"component.{DOMAIN}.issues.ai_entity_missing"
+    assert AI in texts[f"{base}.description"] or "{entity}" in texts[f"{base}.description"]
+    assert f"{base}.fix_flow.step.init.title" in texts
+    assert f"{base}.fix_flow.error.privacy_ack_required" in texts
+
+    new = "ai_task.newer"
+    er.async_get(hass).async_get_or_create("ai_task", "test", "newer", suggested_object_id="newer")
+    hass.states.async_set(new, "idle")
+    with patch("custom_components.text_reader.repairs.eligible_entities", return_value=[new]):
+        result = await mgr.async_init(DOMAIN, data={"issue_id": "ai_entity_missing"})
+        assert result["type"].value == "form" and result["step_id"] == "init"
+        flow_id = result["flow_id"]
+        result = await mgr.async_configure(flow_id, {"ai_entity": new, "privacy_ack": False})
+        assert result["errors"] == {"base": "privacy_ack_required"}
+        assert entry.options["ai_entity"] == AI
+        result = await mgr.async_configure(flow_id, {"ai_entity": new, "privacy_ack": True})
+    assert result["type"].value == "create_entry"
+    assert entry.options["ai_entity"] == new
+    await hass.async_block_till_done()
+    assert entry.state.value == "loaded"  # reloaded with the new options
+    assert entry.runtime_data.coordinator.data.ai_state == "ok"
+    assert _issue(hass, "ai_entity_missing") is None
+    await _poll(hass)
+    assert _issue(hass, "ai_entity_missing") is None
+
+
+async def test_local_unsupported_through_flow_manager(hass, aioclient_mock):
+    mgr = await _manager(hass)
+    _ai_entity(hass)
+    with (
+        patch("custom_components.text_reader.is_hassio", return_value=True),
+        patch("custom_components.text_reader.local_supported", return_value=(False, "arch")),
+    ):
+        entry = await _setup_entry(
+            hass, aioclient_mock, {"url": URL, "token": "t"},
+            {"backend": "local", "ai_entity": AI},
+        )
+        assert _issue(hass, "local_unsupported_here")
+        texts = await _issue_texts(hass, "local_unsupported_here")
+        base = f"component.{DOMAIN}.issues.local_unsupported_here"
+        assert f"{base}.fix_flow.step.confirm.description" in texts
+        assert f"{base}.fix_flow.abort.no_ai_assistant" in texts
+        result = await mgr.async_init(DOMAIN, data={"issue_id": "local_unsupported_here"})
+        assert result["type"].value == "form" and result["step_id"] == "confirm"
+        result = await mgr.async_configure(result["flow_id"], {})
+        assert result["type"].value == "create_entry"
+        assert entry.options["backend"] == "ai_task"
+        await hass.async_block_till_done()
+        assert entry.state.value == "loaded"
+        assert entry.runtime_data.coordinator.local_unsupported is False
+    assert _issue(hass, "local_unsupported_here") is None
+    await _poll(hass)
+    assert _issue(hass, "local_unsupported_here") is None
+
+
+async def test_local_unsupported_without_ai_aborts_through_manager(hass, aioclient_mock):
+    mgr = await _manager(hass)
+    with (
+        patch("custom_components.text_reader.is_hassio", return_value=True),
+        patch("custom_components.text_reader.local_supported", return_value=(False, "arch")),
+    ):
+        entry = await _setup_entry(hass, aioclient_mock, {"url": URL, "token": "t"})
+    result = await mgr.async_init(DOMAIN, data={"issue_id": "local_unsupported_here"})
+    assert result["type"].value == "abort" and result["reason"] == "no_ai_assistant"
+    assert "backend" not in entry.options
+    assert _issue(hass, "local_unsupported_here")  # abort leaves the issue in place

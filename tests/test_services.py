@@ -535,3 +535,25 @@ async def test_duration_sensor_tracks_local_reads_only(hass, entry, tmp_path):
     with patch.object(LocalOcrClient, "read", AsyncMock(return_value=dict(RESULT))):
         await _call(hass, file_path=path, backend="local")
     assert runtime.last_duration_ms == 12
+
+
+async def test_ai_only_entry_with_removed_entity_gives_translated_error(hass, tmp_path):
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers import entity_registry as er
+
+    er.async_get(hass).async_get_or_create("ai_task", "test", "t", suggested_object_id="test")
+    hass.states.async_set(AI_ENTITY, "idle")
+    e = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
+        data={"backend": "ai_task", "ai_entity": AI_ENTITY, "privacy_ack": True},
+    )
+    e.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(e.entry_id)
+    await hass.async_block_till_done()
+    er.async_get(hass).async_remove(AI_ENTITY)
+    hass.states.async_remove(AI_ENTITY)
+    path = await _file(hass, tmp_path)
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=path)
+    assert err.value.translation_key == "ai_unavailable"
+    assert str(err.value) == "The AI assistant for Text Reader isn't available"
