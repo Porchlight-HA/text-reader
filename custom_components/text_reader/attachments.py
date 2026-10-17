@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 from collections.abc import AsyncIterator
@@ -40,6 +41,12 @@ def _remove(path: Path) -> None:
     path.unlink(missing_ok=True)
 
 
+def _after_cancelled_write(done: asyncio.Future[None], path: Path) -> None:
+    if not done.cancelled():
+        done.exception()  # retrieved, so asyncio doesn't log it (it could name the path)
+    _remove(path)
+
+
 def cleanup_leftovers(directory: Path) -> None:
     """Delete files left behind by a crash (runs in the executor)."""
     if not directory.is_dir():
@@ -63,7 +70,14 @@ async def _stage(hass: HomeAssistant, data: bytes, mime: str) -> AsyncIterator[s
     path = directory / token
     registry = staged_registry(hass)
     try:
-        await hass.async_add_executor_job(_write, directory, path, data)
+        write = hass.async_add_executor_job(_write, directory, path, data)
+        try:
+            await asyncio.shield(write)
+        except asyncio.CancelledError:
+            # The thread keeps writing after a cancel; the finally below can run before it creates
+            # the file. Delete it again once the write is over (success or not).
+            write.add_done_callback(lambda done: _after_cancelled_write(done, path))
+            raise
         registry[token] = (path, mime)
         yield f"media-source://{DOMAIN}/{token}"
     finally:

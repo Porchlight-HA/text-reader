@@ -116,3 +116,38 @@ async def test_setup_cleans_leftovers(hass):
     assert await async_setup_component(hass, DOMAIN, {})
     await hass.async_block_till_done()
     assert not (d / "leftover").exists()
+
+
+async def test_cancel_during_write_still_deletes_the_file(hass):
+    # The executor thread keeps writing after the task is cancelled: the file must still go.
+    import threading
+    from unittest.mock import patch
+
+    from custom_components.text_reader import attachments
+
+    started, release = threading.Event(), threading.Event()
+    real_write = attachments._write
+
+    def slow_write(directory, path, data):
+        started.set()
+        release.wait(5)
+        real_write(directory, path, data)
+
+    async def stage():
+        async with stage_image(hass, b"abc", "image/png"):
+            pass  # pragma: no cover - cancelled before the body
+
+    with patch.object(attachments, "_write", slow_write):
+        task = hass.async_create_task(stage())
+        await hass.async_add_executor_job(started.wait, 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        release.set()
+        await hass.async_block_till_done()
+        for _ in range(50):  # the thread finishes, then its done-callback deletes
+            if not any(_tmp(hass).iterdir()):
+                break
+            await asyncio.sleep(0.01)
+    assert not list(_tmp(hass).iterdir())
+    assert not hass.data[DOMAIN]["staged"]
