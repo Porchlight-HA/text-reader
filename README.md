@@ -83,6 +83,12 @@ homeassistant:
 | `meter` | Digits and the decimal point only, as `fields.value` (a number, or null if unparseable), `fields.digits` (the recognised digits as a string) and `fields.confidence` (one number for the whole reading). Use `region` to crop to the dial |
 | `label` | `fields.tracking`: a list of `{carrier, number}` (UPS, USPS, FedEx, DHL), plus the ship-to block |
 
+Tracking numbers in `label`, and their limits:
+
+- **USPS and FedEx** numbers are found when printed solid or in groups of four digits ("9400 1118 9922 …", "1234 5678 9012"). Other digit runs on the same line are never joined, so a ZIP code next to a phone number can't turn into a false FedEx number.
+- **FedEx and DHL** numbers are reported only when the word FEDEX or DHL also appears on the label, because their formats are bare digit runs.
+- **UPS** numbers (`1Z` plus 16 characters) are found only when the OCR reads them without spaces. A label printed as "1Z 999 AA1 01 2345 6784" is not matched; take the number from `text` if you need it.
+
 ## Text extraction contract v1
 
 local_ocr implements this contract. Any other integration can implement it too, and consumers can then accept any "text extractor" without depending on local_ocr.
