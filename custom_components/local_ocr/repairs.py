@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
+from homeassistant.components.repairs import (
+    ConfirmRepairFlow,
+    RepairsFlow,
+    RepairsFlowResult,
+)
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
-
-from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +20,9 @@ class StartAppRepairFlow(ConfirmRepairFlow):
     def __init__(self, entry_id: str | None) -> None:
         self._entry_id = entry_id
 
-    async def async_step_confirm(self, user_input: dict[str, str] | None = None) -> FlowResult:
+    async def async_step_confirm(
+        self, user_input: dict[str, str] | None = None
+    ) -> RepairsFlowResult:
         if user_input is None:
             return await super().async_step_confirm(None)
         entry = (
@@ -47,5 +50,6 @@ async def async_create_fix_flow(
 ) -> RepairsFlow:
     """Create the fix flow for a fixable issue."""
     if issue_id == "app_not_running":
-        return StartAppRepairFlow((data or {}).get("entry_id"))
+        entry_id = (data or {}).get("entry_id")
+        return StartAppRepairFlow(entry_id if isinstance(entry_id, str) else None)
     raise ValueError(f"unknown fixable issue {issue_id}")

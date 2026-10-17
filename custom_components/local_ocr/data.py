@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -20,7 +20,7 @@ class LocalOcrRuntimeData:
 
     client: LocalOcrClient
     coordinator: LocalOcrCoordinator | None = None
-    recent: deque[dict] = field(default_factory=lambda: deque(maxlen=20))
+    recent: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
     last_duration_ms: int | None = None
 
 

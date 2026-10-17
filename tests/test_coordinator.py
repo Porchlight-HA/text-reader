@@ -1,7 +1,7 @@
 """Tests for the status coordinator, repairs and entities."""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from homeassistant.helpers import entity_registry as er
@@ -115,7 +115,7 @@ async def test_managed_without_slug_not_fixable(hass, aioclient_mock):
 
 
 async def test_401_triggers_reauth(hass, aioclient_mock):
-    entry = await _setup(hass, aioclient_mock)
+    await _setup(hass, aioclient_mock)
     aioclient_mock.clear_requests()
     aioclient_mock.get(f"{URL}/v1/health", status=401, json={"error": "unauthorized"})
     await _poll(hass)
@@ -151,6 +151,7 @@ async def test_status_entity_on_off(hass, aioclient_mock):
 
 async def test_last_duration_updates_after_action(hass, aioclient_mock, tmp_path):
     from io import BytesIO
+
     from PIL import Image
 
     entry = await _setup(hass, aioclient_mock)
@@ -182,7 +183,6 @@ async def test_unload_clears_issues(hass, aioclient_mock):
 
 
 async def test_read_401_starts_reauth(hass, aioclient_mock, tmp_path):
-    import pytest
     from homeassistant.exceptions import HomeAssistantError
 
     await _setup(hass, aioclient_mock)
@@ -190,6 +190,7 @@ async def test_read_401_starts_reauth(hass, aioclient_mock, tmp_path):
     aioclient_mock.post(f"{URL}/v1/read", status=401, json={"error": "unauthorized"})
     p = tmp_path / "a.png"
     from io import BytesIO
+
     from PIL import Image
     buf = BytesIO()
     Image.new("RGB", (20, 20)).save(buf, "PNG")

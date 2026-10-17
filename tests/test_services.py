@@ -4,14 +4,12 @@ from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from PIL import Image
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-
 from homeassistant.components import camera as _camera  # noqa: F401
 from homeassistant.components import image as _image  # noqa: F401
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.setup import async_setup_component
+from PIL import Image
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.local_ocr.api import Busy, LocalOcrClient
 from custom_components.local_ocr.const import DOMAIN

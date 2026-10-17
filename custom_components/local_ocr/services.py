@@ -9,7 +9,6 @@ from time import monotonic
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.core import (
     HomeAssistant,
     ServiceCall,
@@ -18,8 +17,8 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.network import get_url
 
 from .api import (
@@ -193,11 +192,60 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
     min_conf = data.get("min_confidence", options.get("min_confidence", 0.5))
     timeout = options.get("timeout", 30)
 
+    started = monotonic()
     image = await _load_image(hass, data)
     region = (
         await _region_px(hass, data["region"], image) if "region" in data else None
     )
 
+    try:
+        result = await _read_with_retry(
+            hass, entry, image, preset, min_conf, region, timeout,
+            data.get("all_frames", False),
+        )
+    except Exception as err:
+        # Translated errors are raised "from None"; the client error is the context.
+        root = err.__context__ if isinstance(err.__context__, LocalOcrError) else err
+        _record(entry, None, preset, None, root)
+        raise
+    _record(entry, result, preset, monotonic() - started, None)
+    return result
+
+
+def _record(
+    entry: LocalOcrConfigEntry,
+    result: dict[str, Any] | None,
+    preset: str,
+    elapsed: float | None,
+    err: Exception | None,
+) -> None:
+    """Append a privacy-safe request record (never any text)."""
+    ms = result.get("ms") if isinstance(result, dict) else None
+    if not isinstance(ms, (int, float)):
+        ms = round(elapsed * 1000) if elapsed is not None else None
+    blocks = result.get("blocks") if isinstance(result, dict) else None
+    entry.runtime_data.recent.append(
+        {
+            "ms": ms,
+            "preset": preset,
+            "width": result.get("width") if isinstance(result, dict) else None,
+            "height": result.get("height") if isinstance(result, dict) else None,
+            "blocks": len(blocks) if isinstance(blocks, list) else 0,
+            "error": type(err).__name__ if err is not None else None,
+        }
+    )
+
+
+async def _read_with_retry(
+    hass: HomeAssistant,
+    entry: LocalOcrConfigEntry,
+    image: bytes,
+    preset: str,
+    min_conf: float,
+    region: tuple[int, int, int, int] | None,
+    timeout: float,
+    all_frames: bool,
+) -> ServiceResponse:
     client = entry.runtime_data.client
     start = monotonic()
     while True:
@@ -207,7 +255,7 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
                 preset=preset,
                 min_confidence=min_conf,
                 region=region,
-                all_frames=data.get("all_frames", False),
+                all_frames=all_frames,
             )
             ms = result.get("ms") if isinstance(result, dict) else None
             if not isinstance(ms, (int, float)):
@@ -253,6 +301,6 @@ def async_register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_READ_IMAGE,
         handle,
-        schema=READ_IMAGE_SCHEMA,
+        schema=READ_IMAGE_SCHEMA,  # type: ignore[arg-type]  # HA shims voluptuous to probatio
         supports_response=SupportsResponse.ONLY,
     )

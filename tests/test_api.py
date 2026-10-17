@@ -3,14 +3,14 @@
 import ast
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import aiohttp
 import pytest
-from unittest.mock import patch
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMockResponse,
 )
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.local_ocr.api import (
     Busy,
