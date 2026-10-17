@@ -2,6 +2,55 @@
   "config": {
     "flow_title": "Text Reader",
     "step": {
+      "user": {
+        "title": "How should Text Reader read images?",
+        "menu_options": {
+          "local": "On this device (private) — uses the free Local OCR app",
+          "ai": "With an AI assistant you already set up — images are sent to that assistant",
+          "both": "Both (recommended) — read on this device, ask the assistant only when it's unsure"
+        }
+      },
+      "user_ai_only": {
+        "title": "How should Text Reader read images?",
+        "description": "This device can't run the Local OCR app (needs a 64-bit system with 2 GB+ memory). Text Reader can use an AI assistant instead.",
+        "menu_options": {
+          "ai": "With an AI assistant you already set up — images are sent to that assistant"
+        }
+      },
+      "ai_entity": {
+        "title": "Pick your AI assistant",
+        "description": "Text Reader sends images to this assistant to read them. A cloud assistant sends them to its provider.",
+        "data": {
+          "ai_entity": "AI assistant",
+          "privacy_ack": "I understand images are sent to this assistant, and cloud assistants can see them."
+        },
+        "data_description": {
+          "ai_entity": "Only assistants that can read images are listed.",
+          "privacy_ack": "Required. Text Reader never sends an image to an assistant without this."
+        }
+      },
+      "install_app": {
+        "title": "Installing the Local OCR app"
+      },
+      "wait_for_discovery": {
+        "title": "Waiting for the Local OCR app"
+      },
+      "install_app_manual": {
+        "title": "Add the Local OCR app",
+        "description": "Text Reader couldn't install the Local OCR app for you.\n\n1. [Add the Local OCR app repository]({repo_link}).\n2. Install the Local OCR app and start it.\n3. Come back here and select Submit. Text Reader waits for the app to start."
+      },
+      "local_container": {
+        "title": "Run Local OCR in a container",
+        "description": "This Home Assistant has no app store, so run Local OCR as a container on a 64-bit machine with 2 GB+ memory. Build the image as described in the [Local OCR docs]({docs_url}), then run:\n\n```\n{docker_run}\n```\n\nThen enter its address and the token you chose.",
+        "data": {
+          "url": "URL",
+          "token": "Access token (optional)"
+        },
+        "data_description": {
+          "url": "Where the Local OCR server listens, for example http://192.168.1.20:8738.",
+          "token": "The LOCAL_OCR_TOKEN value the server was started with. Leave empty if it runs without one."
+        }
+      },
       "hassio_confirm": {
         "title": "Local OCR app",
         "description": "Set up Home Assistant to use the Local OCR app that is running on this system."
@@ -16,21 +65,9 @@
           "token": "The LOCAL_OCR_TOKEN value the server was started with."
         }
       },
-      "user": {
-        "title": "Connect to Local OCR",
-        "description": "Enter the address of your Local OCR server.",
-        "data": {
-          "url": "URL",
-          "token": "Access token (optional)"
-        },
-        "data_description": {
-          "url": "Where the Local OCR server listens, for example http://192.168.1.20:8738. The Local OCR app sets this up for you; you only need this form for a standalone container.",
-          "token": "The LOCAL_OCR_TOKEN value the server was started with. Leave empty if it runs without one."
-        }
-      },
       "test": {
-        "title": "Test the connection",
-        "description": "Read {lines} lines in {seconds} s.\nAddressee: {preview}\nMarkers: {markers}"
+        "title": "Test reading",
+        "description": "Text Reader read a sample envelope.\n\nOn this device: {local_result}\nAI assistant: {ai_result}\n\nSelect Submit to finish."
       },
       "test_failed": {
         "title": "Test the connection",
@@ -60,6 +97,10 @@
         }
       }
     },
+    "progress": {
+      "install_app": "Installing and starting the Local OCR app. This takes a few minutes (about 3 on a Raspberry Pi 4).",
+      "wait_for_discovery": "Waiting for the Local OCR app to start. The first start can take a few minutes."
+    },
     "error": {
       "cannot_connect": "Can't reach the Local OCR app. Make sure it is installed and started.",
       "timeout": "Local OCR didn't answer in time. Try again in a moment.",
@@ -67,13 +108,19 @@
       "invalid_auth": "The access token was rejected.",
       "app_outdated": "The Local OCR app is too old for this integration. Update the app.",
       "model_failed": "The app is running but its OCR model failed to load. Restart the app.",
-      "unknown": "Unexpected error. Check the Home Assistant log."
+      "unknown": "Unexpected error. Check the Home Assistant log.",
+      "privacy_ack_required": "Tick the box to confirm you understand that images are sent to this assistant.",
+      "ai_unavailable": "The AI assistant isn't available or can't read images. Check it, then try again.",
+      "ai_failed": "The AI assistant couldn't read the sample image. Check it, then try again.",
+      "app_not_found": "Text Reader didn't hear from the Local OCR app. Make sure it is installed and started, then try again."
     },
     "abort": {
       "already_configured": "Text Reader is already configured.",
       "single_instance_allowed": "Only one Text Reader can be configured.",
       "reauth_successful": "The access token was updated.",
-      "reconfigure_successful": "The server address was updated."
+      "reconfigure_successful": "The server address was updated.",
+      "no_ai_entities": "No AI assistant that can read images is set up. Add one (for example Ollama with a vision model), then try again.",
+      "no_local_app": "This Text Reader doesn't use the Local OCR app, so there's no address to change. Change the AI assistant in the options."
     }
   },
   "options": {
@@ -81,16 +128,29 @@
       "init": {
         "title": "Text Reader options",
         "data": {
+          "backend": "Read images with",
+          "ai_entity": "AI assistant",
+          "privacy_ack": "I understand images are sent to this assistant, and cloud assistants can see them.",
+          "auto_threshold": "Ask the assistant below this confidence",
           "preset": "Default preset",
           "min_confidence": "Minimum confidence",
           "timeout": "Timeout (seconds)"
         },
         "data_description": {
+          "backend": "On this device (the Local OCR app), with the AI assistant, or both: on this device first, and the assistant only when the read is unsure.",
+          "ai_entity": "The assistant used for AI reads. Only assistants that can read images are listed.",
+          "privacy_ack": "Required when you start using an assistant or pick a different one.",
+          "auto_threshold": "With both, a read whose average confidence is below this goes to the assistant (0.5 to 0.99).",
           "preset": "Used when an action doesn't pick a preset.",
           "min_confidence": "Text recognised with less confidence than this is dropped (0 to 1). Used when an action doesn't set it.",
           "timeout": "How long to wait for one read. Reads with all_frames get at least 180 s."
         }
       }
+    },
+    "error": {
+      "privacy_ack_required": "Tick the box to confirm you understand that images are sent to this assistant.",
+      "ai_entity_required": "Pick the AI assistant to use with this choice.",
+      "local_not_set_up": "This Text Reader was set up without the Local OCR app. To read on this device, remove Text Reader and add it again."
     }
   },
   "selector": {

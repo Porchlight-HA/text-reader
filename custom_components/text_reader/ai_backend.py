@@ -188,6 +188,18 @@ def _entity_problem(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
+def eligible_entities(hass: HomeAssistant) -> list[str]:
+    """AI Task entities that can read an image right now (data with attachments, available)."""
+    try:
+        return sorted(
+            entity_id
+            for entity_id in hass.states.async_entity_ids("ai_task")
+            if _entity_problem(hass, entity_id) is None
+        )
+    except ImportError:
+        return []
+
+
 def _header(image: bytes) -> tuple[int, int, str, int]:
     """(width, height, mime, n_frames) from the Pillow header."""
     try:

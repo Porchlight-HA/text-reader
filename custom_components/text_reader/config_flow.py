@@ -1,8 +1,10 @@
-"""Config flow for Text Reader."""
+"""Config flow for Text Reader: one question, then install, pick and test."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import Any
 
 import voluptuous as vol
@@ -15,15 +17,23 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.selector import (
+    BooleanSelector,
+    EntitySelector,
+    EntitySelectorConfig,
+    EntityWithDeviceFilterSelectorConfig,
     NumberSelector,
     NumberSelectorConfig,
+    NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
 )
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
+from . import app_installer
+from .ai_backend import AiUnavailable, ai_read, eligible_entities
 from .api import (
     CannotConnect,
     LocalOcrClient,
@@ -32,13 +42,31 @@ from .api import (
     Timeout,
     Unauthorized,
 )
+from .app_installer import InstallFailed, local_supported
 from .const import DEFAULT_PORT, DOMAIN, MIN_API, SAMPLE_PATH
+from .data import settings
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_URL = f"http://localhost:{DEFAULT_PORT}"
-DEFAULT_OPTIONS = {"preset": "text", "min_confidence": 0.5, "timeout": 30}
+DEFAULT_THRESHOLD = 0.8
+DEFAULT_OPTIONS: dict[str, Any] = {"preset": "text", "min_confidence": 0.5, "timeout": 30}
 PRESETS = ["text", "envelope", "meter", "label"]
+BACKENDS = ["local", "ai_task", "auto"]
+LOCAL_BACKENDS = ("local", "auto")
+AI_BACKENDS = ("ai_task", "auto")
+NOT_USED = "not used"
+
+MY_ADD_REPOSITORY = (
+    "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/"
+    f"?repository_url={app_installer.APP_REPO_URL}"
+)
+DOCKER_RUN = (
+    "docker run -d --name local-ocr --restart unless-stopped -p 8738:8738 \\\n"
+    "  -e LOCAL_OCR_TOKEN=<choose-a-long-random-string> local-ocr"
+)
+# The selector filter needs the feature by name; the flow also passes the checked list of entities.
+_ATTACHMENTS_FEATURE = "ai_task.AITaskEntityFeature.SUPPORT_ATTACHMENTS"
 
 
 def _clean_token(value: Any) -> str | None:
@@ -52,6 +80,18 @@ def _host_url(host: str, port: int | None) -> str:
     return f"http://{host}:{port or DEFAULT_PORT}"
 
 
+def _summary(lines: int, ms: Any, addressee: list[Any]) -> str:
+    seconds = f"{(ms or 0) / 1000:.1f}"
+    preview = " / ".join(str(line) for line in addressee[:3]) or "none"
+    return f"Read {lines} lines in {seconds} s. Addressee: {preview}"
+
+
+def _addressee_lines(result: dict[str, Any]) -> list[Any]:
+    addressee = (result.get("fields") or {}).get("addressee") or {}
+    lines = addressee.get("lines") if isinstance(addressee, dict) else None
+    return lines if isinstance(lines, list) else []
+
+
 class _CheckFailed(Exception):
     """A test-step check failed; carries the error code."""
 
@@ -62,8 +102,8 @@ class _CheckFailed(Exception):
 
 async def _async_check(
     hass: HomeAssistant, url: str, token: str | None, *, read_sample: bool = True
-) -> dict[str, str]:
-    """Run the connection checks; return description placeholders.
+) -> str:
+    """Run the Local OCR connection checks; return the sample summary ("" without the sample).
 
     Raises _CheckFailed(code). Never logs tokens, image bytes or recognised text.
     """
@@ -73,7 +113,7 @@ async def _async_check(
         if info.api < MIN_API:
             raise _CheckFailed("app_outdated")
         if not read_sample:
-            return {}
+            return ""
         health = await client.health()
         if health.model_state == "error":
             raise _CheckFailed("model_failed")
@@ -101,18 +141,44 @@ async def _async_check(
         _LOGGER.exception("Unexpected error testing Local OCR: %s", type(err).__name__)
         raise _CheckFailed("unknown") from err
 
-    fields = result.get("fields") or {}
-    lines = (fields.get("addressee") or {}).get("lines") or []
-    markers = fields.get("markers") or []
     blocks = [b for b in result.get("blocks") or [] if isinstance(b, dict)]
     # Count visual lines (blocks sharing the server's `line` index), not blocks.
     line_ids = {b["line"] for b in blocks if isinstance(b.get("line"), int)}
-    return {
-        "lines": str(len(line_ids) if line_ids else len(blocks)),
-        "seconds": f"{(result.get('ms') or 0) / 1000:.1f}",
-        "preview": " / ".join(lines[:3]) or "none",
-        "markers": ", ".join(markers) or "none",
-    }
+    lines = len(line_ids) if line_ids else len(blocks)
+    return _summary(lines, result.get("ms"), _addressee_lines(result))
+
+
+async def _async_check_ai(hass: HomeAssistant, entity_id: str) -> str:
+    """Read the sample with the AI entity; return the summary. Raises _CheckFailed(code)."""
+    sample = await hass.async_add_executor_job(SAMPLE_PATH.read_bytes)
+    try:
+        result = await ai_read(hass, entity_id, sample, preset="envelope")
+    except AiUnavailable as err:
+        _LOGGER.warning("AI assistant test failed: %s", err)
+        raise _CheckFailed("ai_unavailable") from None
+    except Exception as err:  # noqa: BLE001  # never log the message: it could hold recognised text
+        _LOGGER.warning("AI assistant test failed: %s", type(err).__name__)
+        raise _CheckFailed("ai_failed") from None
+    text = result.get("text") or ""
+    lines = sum(1 for line in str(text).splitlines() if line.strip())
+    return _summary(lines, result.get("ms"), _addressee_lines(result))
+
+
+def _ai_entity_selector(include: list[str] | None = None) -> EntitySelector:
+    config = EntitySelectorConfig(
+        filter=EntityWithDeviceFilterSelectorConfig(
+            domain="ai_task", supported_features=[_ATTACHMENTS_FEATURE]
+        )
+    )
+    if include is not None:
+        config["include_entities"] = include
+    try:
+        return EntitySelector(config)
+    except Exception:  # noqa: BLE001
+        # Resolving the feature name imports ai_task, which can fail where its requirements are
+        # missing: fall back to the domain filter (the setup step also passes include_entities).
+        config["filter"] = EntityWithDeviceFilterSelectorConfig(domain="ai_task")
+        return EntitySelector(config)
 
 
 class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -121,12 +187,16 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        self._backend = "local"
+        self._ai_entity: str | None = None
         self._url: str = DEFAULT_URL
         self._token: str | None = None
         self._managed = False
         self._slug: str | None = None
         self._needs_token = False
         self._placeholders: dict[str, str] | None = None
+        self._task: asyncio.Task[dict[str, Any]] | None = None
+        self._manual_error: str | None = None
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> TextReaderOptionsFlow:
@@ -192,53 +262,213 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"url": self._url},
         )
 
-    # --- manual ----------------------------------------------------------
+    # --- the one question --------------------------------------------------
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
+        supported, reason = await local_supported(self.hass)
+        if not supported:
+            _LOGGER.debug("Local OCR app not offered here: %s", reason)
+            return self.async_show_menu(step_id="user_ai_only", menu_options=["ai"])
+        return self.async_show_menu(step_id="user", menu_options=["local", "ai", "both"])
+
+    async def async_step_user_ai_only(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The menu shown where the app can't run (its own step, so its text can say why)."""
+        return await self.async_step_user(user_input)
+
+    async def _async_begin(self, backend: str) -> None:
+        self._backend = backend
+        # Claim the unique id now, so the App's own discovery (which fires when the App we install
+        # starts) doesn't open a second flow next to this one.
+        await self.async_set_unique_id(DOMAIN, raise_on_progress=False)
+
+    async def async_step_local(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self._async_begin("local")
+        return await self._async_step_local_app()
+
+    async def async_step_ai(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self._async_begin("ai_task")
+        return await self.async_step_ai_entity()
+
+    async def async_step_both(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self._async_begin("auto")
+        # The AI pick comes first: it's quick, and it can abort before anything is installed.
+        return await self.async_step_ai_entity()
+
+    # --- AI ----------------------------------------------------------------
+
+    async def async_step_ai_entity(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        eligible = eligible_entities(self.hass)
+        if not eligible:
+            return self.async_abort(reason="no_ai_entities")
+        errors: dict[str, str] = {}
         if user_input is not None:
-            await self.async_set_unique_id(DOMAIN)
+            if not user_input.get("privacy_ack"):
+                errors["base"] = "privacy_ack_required"
+            else:
+                self._ai_entity = user_input["ai_entity"]
+                if self._backend == "auto":
+                    return await self._async_step_local_app()
+                return await self.async_step_test()
+        return self.async_show_form(
+            step_id="ai_entity",
+            data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
+                {
+                    vol.Required(
+                        "ai_entity",
+                        default=(user_input or {}).get("ai_entity", eligible[0]),
+                    ): _ai_entity_selector(eligible),
+                    vol.Required("privacy_ack", default=False): BooleanSelector(),
+                }
+            ),
+            errors=errors,
+        )
+
+    # --- the Local OCR app -------------------------------------------------
+
+    async def _async_step_local_app(self) -> ConfigFlowResult:
+        if not is_hassio(self.hass):
+            return await self.async_step_local_container()
+        slug = await app_installer.installed_app(self.hass)
+        if slug is not None:
+            self._slug = slug
+            return await self.async_step_wait_for_discovery()
+        return await self.async_step_install_app()
+
+    async def _async_install(self) -> dict[str, Any]:
+        self._slug = await app_installer.install_and_start(self.hass)
+        return await app_installer.wait_for_discovery(self.hass)
+
+    async def _async_wait(self) -> dict[str, Any]:
+        await app_installer.start_installed(self.hass)
+        return await app_installer.wait_for_discovery(self.hass)
+
+    async def _async_progress(
+        self,
+        step_id: str,
+        work: Coroutine[Any, Any, dict[str, Any]],
+        on_failure: str | None,
+    ) -> ConfigFlowResult:
+        """Run `work` behind a progress step; on success continue to the sample test."""
+        if self._task is None:
+            self._task = self.hass.async_create_task(work, eager_start=False)
+        else:
+            work.close()
+        if not self._task.done():
+            return self.async_show_progress(
+                step_id=step_id, progress_action=step_id, progress_task=self._task
+            )
+        task, self._task = self._task, None
+        try:
+            cfg = task.result()
+        except InstallFailed:
+            self._manual_error = on_failure
+            return self.async_show_progress_done(next_step_id="install_app_manual")
+        self._url = _host_url(str(cfg["host"]), cfg.get("port"))
+        self._token = _clean_token(cfg.get("token"))
+        self._managed = True
+        self._slug = cfg.get("slug") or self._slug
+        return self.async_show_progress_done(next_step_id="test")
+
+    async def async_step_install_app(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._async_progress("install_app", self._async_install(), None)
+
+    async def async_step_wait_for_discovery(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._async_progress(
+            "wait_for_discovery", self._async_wait(), "app_not_found"
+        )
+
+    async def async_step_install_app_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            self._manual_error = None
+            return await self.async_step_wait_for_discovery()
+        return self.async_show_form(
+            step_id="install_app_manual",
+            description_placeholders={"repo_link": MY_ADD_REPOSITORY},
+            errors={"base": self._manual_error} if self._manual_error else {},
+        )
+
+    async def async_step_local_container(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
             self._url = user_input["url"].strip().rstrip("/")
             self._token = _clean_token(user_input.get("token"))
             self._managed = False
             return await self.async_step_test()
         return self.async_show_form(
-            step_id="user",
+            step_id="local_container",
             data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {
                     vol.Required("url", default=DEFAULT_URL): str,
                     vol.Optional("token"): str,
                 }
             ),
+            description_placeholders={
+                "docker_run": DOCKER_RUN,
+                "docs_url": app_installer.APP_REPO_URL,
+            },
         )
 
     # --- test ------------------------------------------------------------
 
+    async def _async_run_tests(self) -> dict[str, str]:
+        local_result = ai_result = NOT_USED
+        if self._backend in LOCAL_BACKENDS:
+            local_result = await _async_check(self.hass, self._url, self._token)
+        if self._backend in AI_BACKENDS and self._ai_entity:
+            ai_result = await _async_check_ai(self.hass, self._ai_entity)
+        return {"local_result": local_result, "ai_result": ai_result}
+
+    def _entry_data(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"backend": self._backend}
+        if self._backend in LOCAL_BACKENDS:
+            data.update(url=self._url, token=self._token, managed=self._managed)
+            if self._slug:
+                data["slug"] = self._slug
+        if self._backend in AI_BACKENDS:
+            data["ai_entity"] = self._ai_entity
+        return data
+
     async def async_step_test(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
         if user_input is not None and self._placeholders is not None:
             return self.async_create_entry(
                 title="Text Reader",
-                data={
-                    "url": self._url,
-                    "token": self._token,
-                    "managed": self._managed,
-                    **({"slug": self._slug} if self._slug else {}),
+                data=self._entry_data(),
+                options={
+                    "backend": self._backend,
+                    "ai_entity": self._ai_entity,
+                    "auto_threshold": DEFAULT_THRESHOLD,
+                    **DEFAULT_OPTIONS,
                 },
-                options=dict(DEFAULT_OPTIONS),
             )
         self._placeholders = None
         try:
-            self._placeholders = await _async_check(self.hass, self._url, self._token)
+            self._placeholders = await self._async_run_tests()
         except _CheckFailed as err:
-            errors["base"] = err.code
             # A neutral form that claims no result; Submit retries the test.
-            return self.async_show_form(step_id="test_failed", errors=errors)
+            return self.async_show_form(step_id="test_failed", errors={"base": err.code})
         return self.async_show_form(
             step_id="test", description_placeholders=self._placeholders
         )
@@ -301,6 +531,8 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         entry = self._get_reconfigure_entry()
+        if not entry.data.get("url"):
+            return self.async_abort(reason="no_local_app")
         errors: dict[str, str] = {}
         if user_input is not None:
             url = user_input["url"].strip().rstrip("/")
@@ -322,18 +554,65 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class TextReaderOptionsFlow(OptionsFlowWithReload):
-    """Options: default preset, confidence, timeout. Saving reloads the entry so changes take effect."""
+    """Options: backend, AI assistant, auto threshold, preset, confidence, timeout.
+
+    Saving reloads the entry so changes take effect.
+    """
+
+    def _validate(self, user_input: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        """Return (options to save, error code or None)."""
+        entry = self.config_entry
+        current = settings(entry)
+        backend = user_input["backend"]
+        ai_entity = user_input.get("ai_entity") or None
+        options = {k: v for k, v in user_input.items() if k != "privacy_ack"}
+        options["ai_entity"] = ai_entity
+        if backend in LOCAL_BACKENDS and not entry.data.get("url"):
+            return options, "local_not_set_up"
+        if backend in AI_BACKENDS:
+            if ai_entity is None:
+                return options, "ai_entity_required"
+            already_acked = current.backend in AI_BACKENDS and current.ai_entity == ai_entity
+            if not already_acked and not user_input.get("privacy_ack"):
+                return options, "privacy_ack_required"
+        return options, None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        opts = {**DEFAULT_OPTIONS, **self.config_entry.options}
+            options, error = self._validate(user_input)
+            if error is None:
+                return self.async_create_entry(data=options)
+            errors["base"] = error
+        current = settings(self.config_entry)
+        opts = {
+            **DEFAULT_OPTIONS,
+            "auto_threshold": DEFAULT_THRESHOLD,
+            **self.config_entry.options,
+            "backend": current.backend,
+            **(user_input or {}),
+        }
+        ai_entity = (user_input or {}).get("ai_entity", current.ai_entity)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {
+                    vol.Required("backend", default=opts["backend"]): SelectSelector(
+                        SelectSelectorConfig(options=BACKENDS, translation_key="backend")
+                    ),
+                    vol.Optional(
+                        "ai_entity", description={"suggested_value": ai_entity}
+                    ): _ai_entity_selector(),
+                    vol.Optional("privacy_ack", default=False): BooleanSelector(),
+                    vol.Required(
+                        "auto_threshold", default=opts["auto_threshold"]
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0.5, max=0.99, step=0.01, mode=NumberSelectorMode.BOX
+                        )
+                    ),
                     vol.Required("preset", default=opts["preset"]): SelectSelector(
                         SelectSelectorConfig(options=PRESETS, translation_key="preset")
                     ),
@@ -347,4 +626,5 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
                     ),
                 }
             ),
+            errors=errors,
         )
