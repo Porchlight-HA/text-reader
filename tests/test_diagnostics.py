@@ -125,3 +125,42 @@ async def test_diagnostics_strips_url_credentials(hass, aioclient_mock) -> None:
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert "hunter2pw" not in json.dumps(diag)
     assert diag["entry"]["data"]["url"] == "http://ocr.test:8738/base"
+
+
+async def test_diagnostics_includes_backend_no_text(hass, aioclient_mock) -> None:
+    from custom_components.text_reader.ai_backend import AI_PROMPT_VERSION
+
+    aioclient_mock.get(
+        f"{URL}/v1/info",
+        json={"version": "0.3.0", "api": 1, "arch": "amd64", "engine": "rapidocr"},
+    )
+    aioclient_mock.get(
+        f"{URL}/v1/health", json={"status": "ok", "model_state": "ready"}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=DOMAIN,
+        title="Text Reader",
+        data={"url": URL, "token": "s3cret-token"},
+        options={
+            "backend": "auto",
+            "ai_entity": "ai_task.test_assistant",
+            "auto_threshold": 0.7,
+            "privacy_ack": True,
+        },
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.recent.append(
+        {"ms": 5, "preset": "text", "width": 1, "height": 1, "blocks": 0,
+         "error": None, "backend": "auto", "routed": "local→ai_task"}
+    )
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["backend"] == "auto"
+    assert diag["ai_entity"] == "ai_task.test_assistant"
+    assert diag["auto_threshold"] == 0.7
+    assert diag["ai_prompt_version"] == AI_PROMPT_VERSION
+    assert diag["recent"][0]["routed"] == "local→ai_task"
+    assert "s3cret-token" not in json.dumps(diag)
+    assert diag["entry"]["data"]["token"] == "**REDACTED**"

@@ -9,7 +9,8 @@ from urllib.parse import urlsplit, urlunsplit
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .data import TextReaderConfigEntry
+from .ai_backend import AI_PROMPT_VERSION
+from .data import TextReaderConfigEntry, settings
 
 TO_REDACT = {"token"}
 
@@ -33,8 +34,13 @@ async def async_get_config_entry_diagnostics(
     entry_data = async_redact_data(entry.as_dict(), TO_REDACT)
     if "url" in entry_data.get("data", {}):
         entry_data["data"]["url"] = _strip_userinfo(entry_data["data"]["url"])
+    cfg = settings(entry)
     return {
         "entry": entry_data,
+        "backend": cfg.backend,
+        "ai_entity": cfg.ai_entity,
+        "auto_threshold": cfg.auto_threshold,
+        "ai_prompt_version": AI_PROMPT_VERSION,
         "managed": bool(entry.data.get("managed", False)),
         "info": asdict(status.info) if status and status.info else None,
         "health": asdict(status.health) if status and status.health else None,
