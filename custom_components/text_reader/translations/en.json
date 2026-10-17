@@ -71,7 +71,13 @@
       },
       "test_failed": {
         "title": "Test the connection",
-        "description": "The connection test didn't pass. Fix the problem shown below, then select Submit to try again."
+        "description": "The connection test didn't pass. Fix the problem shown below, then select Submit to try again, or choose to change how Text Reader reads images.",
+        "data": {
+          "next": "What next"
+        },
+        "data_description": {
+          "next": "Try the test again, or go back and choose on this device, an AI assistant, or both."
+        }
       },
       "reauth_confirm": {
         "title": "Access token needed",
@@ -172,6 +178,12 @@
         "local": "Local OCR app",
         "ai_task": "AI assistant",
         "auto": "Local first, then AI"
+      }
+    },
+    "test_failed_next": {
+      "options": {
+        "retry": "Try again",
+        "change": "Change how Text Reader reads images"
       }
     }
   },

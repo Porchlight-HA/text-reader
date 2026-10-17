@@ -456,7 +456,7 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="local_container",
             data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {
-                    vol.Required("url", default=DEFAULT_URL): str,
+                    vol.Required("url", default=self._url): str,
                     vol.Optional("token"): str,
                 }
             ),
@@ -495,7 +495,8 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
                 data=self._entry_data(),
                 options={
                     "backend": self._backend,
-                    "ai_entity": self._ai_entity,
+                    # Only when this backend uses it: after "change", a local-only choice drops it.
+                    "ai_entity": self._ai_entity if self._backend in AI_BACKENDS else None,
                     "auto_threshold": DEFAULT_THRESHOLD,
                     **DEFAULT_OPTIONS,
                 },
@@ -504,8 +505,21 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             self._placeholders = await self._async_run_tests()
         except _CheckFailed as err:
-            # A neutral form that claims no result; Submit retries the test.
-            return self.async_show_form(step_id="test_failed", errors={"base": err.code})
+            # A neutral form that claims no result. Submit retries the test, or goes back to the
+            # choice (so a failing assistant doesn't trap a working local setup, or the reverse).
+            return self.async_show_form(
+                step_id="test_failed",
+                data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
+                    {
+                        vol.Required("next", default="retry"): SelectSelector(
+                            SelectSelectorConfig(
+                                options=["retry", "change"], translation_key="test_failed_next"
+                            )
+                        )
+                    }
+                ),
+                errors={"base": err.code},
+            )
         return self.async_show_form(
             step_id="test", description_placeholders=self._placeholders
         )
@@ -513,6 +527,11 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_test_failed(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        if (user_input or {}).get("next") == "change":
+            # Back to the one question. What was found or entered for the local App (address,
+            # token, slug) is kept, so choosing it again doesn't start from scratch.
+            self._placeholders = None
+            return await self.async_step_user()
         return await self.async_step_test()
 
     # --- reauth / reconfigure -------------------------------------------

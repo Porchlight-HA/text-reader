@@ -1084,3 +1084,56 @@ def test_manual_install_error_copy():
     assert err["app_not_installed_yet"] == (
         "The Local OCR app isn't installed yet. Use the button above to add it, then press Submit.")
     assert err["app_too_old"] == "Update the Local OCR app to 0.3.0 or newer, then press Submit."
+
+
+# --- final review T6: a failed test can go back and change how Text Reader reads ------------
+
+
+async def test_failed_ai_test_can_change_to_local_only(hass, aioclient_mock):
+    ai_entities(hass, AI)
+    mock_server(aioclient_mock)
+    result = await pick(hass, "both")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"ai_entity": AI, "privacy_ack": True})
+    assert result["step_id"] == "local_container"
+    with patch(f"{CF}.ai_read", AsyncMock(side_effect=RuntimeError("x"))):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"url": URL})
+    assert result["step_id"] == "test_failed"
+    assert result["errors"] == {"base": "ai_failed"}
+    assert {k.schema for k in result["data_schema"].schema} == {"next"}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next": "change"})
+    assert result["type"] is FlowResultType.MENU and result["step_id"] == "user"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "local"})
+    assert result["step_id"] == "local_container"
+    url_field = next(k for k in result["data_schema"].schema if k.schema == "url")
+    assert url_field.default() == URL  # what the user already entered is kept
+    with patch(f"{CF}.ai_read", AsyncMock()) as read:
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"url": URL})
+    read.assert_not_awaited()
+    assert result["step_id"] == "test"
+    assert result["description_placeholders"] == {"local_result": LOCAL_RESULT, "ai_result": "not used"}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {"backend": "local", "url": URL, "token": None, "managed": False}
+    assert result["options"]["ai_entity"] is None
+
+
+async def test_failed_test_retry_is_the_default(hass, aioclient_mock):
+    ai_entities(hass, AI)
+    result = await pick(hass, "ai")
+    with patch(f"{CF}.ai_read", AsyncMock(side_effect=RuntimeError("x"))):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"ai_entity": AI, "privacy_ack": True})
+    assert result["step_id"] == "test_failed"
+    with patch(f"{CF}.ai_read", AsyncMock(return_value=AI_READ)):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next": "retry"})
+    assert result["step_id"] == "test"
+
+
+def test_test_failed_copy():
+    import json
+    from pathlib import Path
+
+    strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
+    assert set(strings["selector"]["test_failed_next"]["options"]) == {"retry", "change"}
+    assert "next" in strings["config"]["step"]["test_failed"]["data"]
