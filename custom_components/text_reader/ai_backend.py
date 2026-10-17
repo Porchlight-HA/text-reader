@@ -242,6 +242,22 @@ def _to_rgb(img: Image.Image) -> Image.Image:
     return img if img.mode == "RGB" else img.convert("RGB")
 
 
+def _strip_metadata(img: Image.Image, fmt: str) -> bytes:
+    """Re-save a pass-through image without EXIF (which can carry GPS), text or comments.
+
+    Pixels are kept: JPEG reuses its quantisation tables ("keep"), PNG is lossless and WEBP is
+    saved lossless. Only the ICC colour profile (if any) is carried over.
+    """
+    buf = io.BytesIO()
+    if fmt == "JPEG":
+        img.save(buf, format="JPEG", quality="keep", exif=b"", comment=b"")
+    elif fmt == "WEBP":
+        img.save(buf, format="WEBP", lossless=True, exif=b"", xmp=b"")
+    else:
+        img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _encode_frame(
     img: Image.Image, source: bytes, region: Region | None, single: bool
 ) -> _Frame:
@@ -251,7 +267,7 @@ def _encode_frame(
     width, height = (h, w) if orientation in (5, 6, 7, 8) else (w, h)
     fmt = img.format or ""
     if single and not rotate and region is None and fmt in _PASSTHROUGH:
-        return _Frame(source, Image.MIME[fmt], width, height)
+        return _Frame(_strip_metadata(img, fmt), Image.MIME[fmt], width, height)
     frame = ImageOps.exif_transpose(img) if rotate else img
     if region is not None:
         x, y, rw, rh = region
@@ -274,7 +290,8 @@ def prepare_frames(
 
     Opens the image, picks the frame(s) (frame `index`, default 0, unless all_frames), applies the
     EXIF rotation, crops the region in rotated coordinates, and re-encodes unless the source is
-    already a single-frame JPEG/PNG/WEBP with no rotation and no crop. Raises ImageRejected.
+    already a single-frame JPEG/PNG/WEBP with no rotation and no crop (then only its metadata is
+    stripped). Raises ImageRejected.
     """
     try:
         with Image.open(io.BytesIO(image)) as img:

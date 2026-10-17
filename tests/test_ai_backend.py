@@ -347,14 +347,61 @@ async def test_ai_animated_gif_sends_frame_zero_only(hass):
     assert (out["width"], out["height"]) == (20, 10)
 
 
-async def test_ai_plain_image_passes_through_unchanged(hass):
+async def test_ai_plain_image_passes_through_pixels_unchanged(hass):
     _entity(hass)
     buf = io.BytesIO()
     Image.new("RGB", (30, 20), "white").save(buf, "JPEG")
     sent: list = []
     with patch(PATCH, _capture(hass, sent)):
         await ai_read(hass, ENTITY, buf.getvalue(), preset="text")
-    assert sent[0] == (buf.getvalue(), "image/jpeg")
+    data, mime = sent[0]
+    assert mime == "image/jpeg" and Image.open(io.BytesIO(data)).size == (30, 20)
+
+
+def _gps_exif() -> Image.Exif:
+    exif = Image.Exif()
+    exif[0x010F] = "SecretCam"
+    exif.get_ifd(0x8825).update({1: "N", 2: (40.0, 26.0, 46.0), 3: "W", 4: (79.0, 58.0, 56.0)})
+    return exif
+
+
+def _no_metadata(data: bytes) -> None:
+    img = Image.open(io.BytesIO(data))
+    assert len(img.getexif()) == 0 and not img.getexif().get_ifd(0x8825)
+    assert b"Exif" not in data and b"SecretCam" not in data
+
+
+async def test_ai_jpeg_pass_through_strips_exif_gps(hass):
+    _entity(hass)
+    buf = io.BytesIO()
+    Image.new("RGB", (30, 20), "white").save(buf, "JPEG", exif=_gps_exif())
+    assert Image.open(io.BytesIO(buf.getvalue())).getexif().get_ifd(0x8825)  # fixture has GPS
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        await ai_read(hass, ENTITY, buf.getvalue(), preset="text")
+    data, mime = sent[0]
+    assert mime == "image/jpeg"
+    _no_metadata(data)
+
+
+async def test_ai_png_and_webp_pass_through_strip_metadata(hass):
+    from PIL import PngImagePlugin
+
+    _entity(hass)
+    png = io.BytesIO()
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Comment", "SecretCam")
+    Image.new("RGB", (30, 20), "white").save(png, "PNG", pnginfo=info, exif=_gps_exif())
+    webp = io.BytesIO()
+    Image.new("RGB", (30, 20), "white").save(webp, "WEBP", exif=_gps_exif())
+    for src, mime in ((png.getvalue(), "image/png"), (webp.getvalue(), "image/webp")):
+        sent: list = []
+        with patch(PATCH, _capture(hass, sent)):
+            await ai_read(hass, ENTITY, src, preset="text")
+        data, got = sent[0]
+        assert got == mime
+        _no_metadata(data)
+        assert not Image.open(io.BytesIO(data)).info.get("Comment")
 
 
 async def test_ai_large_photo_reencoded_as_jpeg(hass):
