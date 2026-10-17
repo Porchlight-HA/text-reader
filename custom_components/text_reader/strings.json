@@ -101,6 +101,13 @@
         "meter": "Meter",
         "label": "Label"
       }
+    },
+    "backend": {
+      "options": {
+        "local": "Local OCR app",
+        "ai_task": "AI assistant",
+        "auto": "Local first, then AI"
+      }
     }
   },
   "exceptions": {
@@ -154,12 +161,15 @@
     },
     "unexpected_error": {
       "message": "Unexpected Text Reader error ({error}). Check the Home Assistant log."
+    },
+    "ai_unavailable": {
+      "message": "The AI assistant for Text Reader isn't available."
     }
   },
   "services": {
     "read_image": {
       "name": "Read image",
-      "description": "Reads the text in an image with the Local OCR app and returns the result.",
+      "description": "Reads the text in an image with the Local OCR app or an AI assistant and returns the result.",
       "fields": {
         "config_entry_id": {
           "name": "Local OCR server",
@@ -184,6 +194,10 @@
         "preset": {
           "name": "Preset",
           "description": "What kind of text to expect. Defaults to the preset in the integration options."
+        },
+        "backend": {
+          "name": "Backend",
+          "description": "Which reader to use: the Local OCR app, the AI assistant, or the app first with the AI as fallback. Defaults to the integration option."
         },
         "region": {
           "name": "Region",

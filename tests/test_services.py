@@ -16,6 +16,7 @@ from custom_components.text_reader.const import DOMAIN
 
 URL = "http://ocr.test:8738"
 RESULT = {"text": "synthetic", "ms": 12, "blocks": [], "fields": {}}
+LOCAL_RESULT = {**RESULT, "routed": "local", "confidence": None}
 
 
 def _png(w=200, h=100) -> bytes:
@@ -52,7 +53,7 @@ async def test_read_image_from_file_returns_response(hass, entry, aioclient_mock
     p = tmp_path / "a.png"
     p.write_bytes(_png())
     hass.config.allowlist_external_dirs = {str(tmp_path)}
-    assert await _call(hass, file_path=str(p)) == RESULT
+    assert await _call(hass, file_path=str(p)) == LOCAL_RESULT
     assert aioclient_mock.call_count == 1
 
 
@@ -93,7 +94,7 @@ async def test_image_entity_source(hass, entry, aioclient_mock):
     img = MagicMock(content=_png())
     with patch("homeassistant.components.image.async_get_image",
                AsyncMock(return_value=img)) as m:
-        assert await _call(hass, image_entity="image.mailbox") == RESULT
+        assert await _call(hass, image_entity="image.mailbox") == LOCAL_RESULT
     assert m.call_args.args[1] == "image.mailbox"
 
 
@@ -103,7 +104,7 @@ async def test_media_source_local(hass, entry, tmp_path):
     resolved = MagicMock(path=p, url="/x")
     with patch("homeassistant.components.media_source.async_resolve_media",
                AsyncMock(return_value=resolved)):
-        assert await _call(hass, media_content_id="media-source://media_source/local/m.png") == RESULT
+        assert await _call(hass, media_content_id="media-source://media_source/local/m.png") == LOCAL_RESULT
 
 
 async def test_server_415_maps_image_rejected(hass, entry, aioclient_mock, tmp_path):
@@ -171,7 +172,7 @@ async def test_all_frames_uses_longer_timeout(hass, entry, tmp_path):
     p = tmp_path / "a.png"
     p.write_bytes(_png())
     hass.config.allowlist_external_dirs = {str(tmp_path)}
-    read = AsyncMock(return_value=RESULT)
+    read = AsyncMock(return_value=dict(RESULT))
     with patch.object(LocalOcrClient, "read", read):
         await _call(hass, file_path=str(p))
         await _call(hass, file_path=str(p), all_frames=True)
@@ -202,10 +203,10 @@ async def test_busy_retries_then_succeeds(hass, entry, tmp_path):
     p.write_bytes(_png())
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     sleep = AsyncMock()
-    read = AsyncMock(side_effect=[Busy(5), Busy(5), RESULT])
+    read = AsyncMock(side_effect=[Busy(5), Busy(5), dict(RESULT)])
     with patch("custom_components.text_reader.services.sleep", sleep), \
             patch.object(LocalOcrClient, "read", read):
-        assert await _call(hass, file_path=str(p)) == RESULT
+        assert await _call(hass, file_path=str(p)) == LOCAL_RESULT
     assert [c.args[0] for c in sleep.call_args_list] == [5, 5]
     assert read.call_count == 3
 
@@ -254,7 +255,7 @@ async def test_busy_retry_after_clamped(hass, entry, tmp_path):
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     sleep = AsyncMock()
     with patch("custom_components.text_reader.services.sleep", sleep), \
-            patch.object(LocalOcrClient, "read", AsyncMock(side_effect=[Busy(0), RESULT])):
+            patch.object(LocalOcrClient, "read", AsyncMock(side_effect=[Busy(0), dict(RESULT)])):
         await _call(hass, file_path=str(p))
     assert sleep.call_args.args[0] == 0.5
 
@@ -264,7 +265,7 @@ async def test_media_source_remote_absolute(hass, entry, aioclient_mock):
     resolved = MagicMock(path=None, url="http://media.test/p.png")
     with patch("homeassistant.components.media_source.async_resolve_media",
                AsyncMock(return_value=resolved)):
-        assert await _call(hass, media_content_id="media-source://x/p") == RESULT
+        assert await _call(hass, media_content_id="media-source://x/p") == LOCAL_RESULT
 
 
 async def test_media_source_remote_relative(hass, entry, aioclient_mock):
@@ -274,7 +275,7 @@ async def test_media_source_remote_relative(hass, entry, aioclient_mock):
                AsyncMock(return_value=resolved)), \
             patch("custom_components.text_reader.services.get_url",
                   return_value="http://ha.test:8123"):
-        assert await _call(hass, media_content_id="media-source://x/p") == RESULT
+        assert await _call(hass, media_content_id="media-source://x/p") == LOCAL_RESULT
 
 
 async def test_media_source_relative_no_url(hass, entry):
@@ -405,7 +406,7 @@ async def test_file_at_the_cap_is_sent(hass, entry, aioclient_mock, tmp_path):
     p = tmp_path / "edge.png"
     p.write_bytes(b"\0" * MAX_IMAGE_BYTES)
     hass.config.allowlist_external_dirs = {str(tmp_path)}
-    assert await _call(hass, file_path=str(p)) == RESULT
+    assert await _call(hass, file_path=str(p)) == LOCAL_RESULT
 
 
 async def test_oversized_remote_media_rejected(hass, entry, aioclient_mock):
@@ -430,3 +431,85 @@ async def test_unexpected_client_error_is_translated(hass, entry, tmp_path):
         await _call(hass, file_path=str(p))
     assert err.value.translation_key == "unexpected_error"
     assert err.value.translation_placeholders == {"error": "LocalOcrError"}
+
+
+AI_ENTITY = "ai_task.test"
+AI_RESULT = {
+    "text": "from ai", "blocks": [], "fields": {}, "width": 200, "height": 100,
+    "ms": 9, "engine": f"ai_task:{AI_ENTITY}", "model": None, "preset": "text",
+    "confidence": None,
+}
+
+
+async def _file(hass, tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    return str(p)
+
+
+@pytest.fixture
+async def ai_entry(hass):
+    e = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
+        data={"backend": "ai_task", "ai_entity": AI_ENTITY, "privacy_ack": True},
+        options={"preset": "text", "min_confidence": 0.5, "timeout": 30},
+    )
+    e.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(e.entry_id)
+    await hass.async_block_till_done()
+    return e
+
+
+async def test_backend_field_overrides_option(hass, entry, tmp_path):
+    path = await _file(hass, tmp_path)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "backend": "local", "ai_entity": AI_ENTITY}
+    )
+    ai = AsyncMock(return_value=dict(AI_RESULT))
+    with patch("custom_components.text_reader.router.ai_read", ai), \
+            patch.object(LocalOcrClient, "read", AsyncMock(return_value=dict(RESULT))) as local:
+        result = await _call(hass, file_path=path, backend="ai_task")
+        assert result["routed"] == "ai_task"
+        local.assert_not_called()
+        result = await _call(hass, file_path=path)  # option backend=local
+        assert result["routed"] == "local"
+    assert ai.call_count == 1
+    with pytest.raises(Exception, match="backend"):  # probatio MultipleInvalid
+        await _call(hass, file_path=path, backend="cloud")
+
+
+async def test_ai_only_entry_reads_without_app(hass, ai_entry, tmp_path):
+    assert ai_entry.runtime_data.client is None
+    path = await _file(hass, tmp_path)
+    with patch("custom_components.text_reader.router.ai_read",
+               AsyncMock(return_value=dict(AI_RESULT))):
+        result = await _call(hass, file_path=path)
+    assert result["routed"] == "ai_task"
+    assert result["text"] == "from ai"
+    assert ai_entry.runtime_data.recent[-1]["backend"] == "ai_task"
+
+
+async def test_ai_unavailable_translated(hass, ai_entry, tmp_path):
+    from custom_components.text_reader.ai_backend import AiUnavailable
+
+    path = await _file(hass, tmp_path)
+    with patch("custom_components.text_reader.router.ai_read",
+               AsyncMock(side_effect=AiUnavailable("secret provider text"))):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, file_path=path)
+    assert err.value.translation_key == "ai_unavailable"
+    assert err.value.__cause__ is None and err.value.__suppress_context__
+    assert "secret" not in str(err.value)
+    assert "ai_unavailable" in _exception_strings()
+    assert ai_entry.runtime_data.recent[-1]["error"] == "AiUnavailable"
+
+
+async def test_recent_records_routed_no_text(hass, entry, tmp_path):
+    path = await _file(hass, tmp_path)
+    await _call(hass, file_path=path)
+    rec = entry.runtime_data.recent[-1]
+    assert rec["backend"] == "local"
+    assert rec["routed"] == "local"
+    assert "synthetic" not in repr(rec)
+    assert "text" not in rec

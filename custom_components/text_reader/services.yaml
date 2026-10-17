@@ -34,6 +34,15 @@ read_image:
             - envelope
             - meter
             - label
+    backend:
+      required: false
+      selector:
+        select:
+          translation_key: backend
+          options:
+            - local
+            - ai_task
+            - auto
     region:
       required: false
       example: '{"x": 0.1, "y": 0.2, "w": 0.5, "h": 0.4}'

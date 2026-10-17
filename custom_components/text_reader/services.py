@@ -21,6 +21,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.network import get_url
 
+from .ai_backend import AiUnavailable
 from .api import (
     Busy,
     CannotConnect,
@@ -31,10 +32,12 @@ from .api import (
     Unauthorized,
 )
 from .const import DOMAIN, SIGNAL_DURATION_UPDATED
-from .data import TextReaderConfigEntry
+from .data import TextReaderConfigEntry, settings
+from .router import route_read
 
 SERVICE_READ_IMAGE = "read_image"
 PRESETS = ["text", "envelope", "meter", "label"]
+BACKENDS = ["local", "ai_task", "auto"]
 SOURCES = ("image_entity", "camera_entity", "file_path", "media_content_id")
 # Reading every frame of an animation takes about one single read per frame (2.5-4 s each on a Pi 4).
 ALL_FRAMES_TIMEOUT = 180
@@ -60,6 +63,7 @@ READ_IMAGE_SCHEMA = vol.Schema(
         vol.Optional("file_path"): cv.string,
         vol.Optional("media_content_id"): cv.string,
         vol.Optional("preset"): vol.In(PRESETS),
+        vol.Optional("backend"): vol.In(BACKENDS),
         vol.Optional("region"): REGION_SCHEMA,
         vol.Optional("min_confidence"): vol.All(
             vol.Coerce(float), vol.Range(min=0, max=1)
@@ -237,6 +241,7 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
     options = entry.options
     preset = data.get("preset") or options.get("preset", "text")
     min_conf = data.get("min_confidence", options.get("min_confidence", 0.5))
+    backend = data.get("backend") or settings(entry).backend
     timeout = float(options.get("timeout", 30))
     if data.get("all_frames", False):
         timeout = max(timeout, ALL_FRAMES_TIMEOUT)
@@ -249,15 +254,19 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
 
     try:
         result = await _read_with_retry(
-            hass, entry, image, preset, min_conf, region, timeout,
+            hass, entry, image, backend, preset, min_conf, region, timeout,
             data.get("all_frames", False),
         )
     except Exception as err:
         # Translated errors are raised "from None"; the client error is the context.
-        root = err.__context__ if isinstance(err.__context__, LocalOcrError) else err
-        _record(entry, None, preset, None, root)
+        root = (
+            err.__context__
+            if isinstance(err.__context__, (LocalOcrError, AiUnavailable))
+            else err
+        )
+        _record(entry, None, preset, None, root, backend)
         raise
-    _record(entry, result, preset, monotonic() - started, None)
+    _record(entry, result, preset, monotonic() - started, None, backend)
     return result
 
 
@@ -267,6 +276,7 @@ def _record(
     preset: str,
     elapsed: float | None,
     err: Exception | None,
+    backend: str,
 ) -> None:
     """Append a privacy-safe request record (never any text)."""
     ms = result.get("ms") if isinstance(result, dict) else None
@@ -281,6 +291,8 @@ def _record(
             "height": result.get("height") if isinstance(result, dict) else None,
             "blocks": len(blocks) if isinstance(blocks, list) else 0,
             "error": type(err).__name__ if err is not None else None,
+            "backend": backend,
+            "routed": result.get("routed") if isinstance(result, dict) else None,
         }
     )
 
@@ -289,14 +301,13 @@ async def _read_with_retry(
     hass: HomeAssistant,
     entry: TextReaderConfigEntry,
     image: bytes,
+    backend: str,
     preset: str,
     min_conf: float,
     region: tuple[int, int, int, int] | None,
     timeout: float,
     all_frames: bool,
 ) -> ServiceResponse:
-    client = entry.runtime_data.client
-    assert client is not None  # Task 5 routes through router.route_read
     start = monotonic()
     timed_out = HomeAssistantError(
         translation_domain=DOMAIN,
@@ -305,25 +316,35 @@ async def _read_with_retry(
     )
     while True:
         try:
-            result = await client.read(
+            result = await route_read(
+                hass,
+                entry,
                 image,
+                backend=backend,
                 preset=preset,
                 min_confidence=min_conf,
                 region=region,
                 all_frames=all_frames,
                 timeout=timeout,
             )
-            ms = result.get("ms") if isinstance(result, dict) else None
-            if not isinstance(ms, (int, float)):
-                ms = (monotonic() - start) * 1000
-            entry.runtime_data.last_duration_ms = round(ms)
-            async_dispatcher_send(hass, SIGNAL_DURATION_UPDATED)
+            if result.get("routed") != "ai_task":
+                # The duration sensor tracks the local App only.
+                ms = result.get("ms")
+                if not isinstance(ms, (int, float)):
+                    ms = (monotonic() - start) * 1000
+                entry.runtime_data.last_duration_ms = round(ms)
+                async_dispatcher_send(hass, SIGNAL_DURATION_UPDATED)
             return result
         except Busy as busy:
             delay = max(busy.retry_after, 0.5)
             if monotonic() - start + delay > timeout:
                 raise timed_out from None
             await sleep(delay)
+        except AiUnavailable:
+            # Never include the AI's error text.
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="ai_unavailable"
+            ) from None
         except Timeout:
             raise timed_out from None
         except ImageRejected as err:

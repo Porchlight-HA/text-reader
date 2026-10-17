@@ -74,7 +74,7 @@ async def test_diagnostics_never_contains_text(
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert len(diag["recent"]) == 1
     rec = diag["recent"][0]
-    assert set(rec) == {"ms", "preset", "width", "height", "blocks", "error"}
+    assert set(rec) == {"ms", "preset", "width", "height", "blocks", "error", "backend", "routed"}
     assert rec["blocks"] == 1
     assert rec["error"] is None
     assert (rec["width"], rec["height"]) == (200, 100)
