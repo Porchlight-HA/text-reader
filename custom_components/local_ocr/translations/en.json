@@ -96,6 +96,9 @@
     },
     "timeout": {
       "message": "Local OCR didn't answer within {timeout} s."
+    },
+    "invalid_region": {
+      "message": "The region must have non-negative x and y, a positive width and height, and use either all fractions (0–1) or all pixels."
     }
   },
   "services": {
