@@ -5,14 +5,13 @@ from __future__ import annotations
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import LocalOcrClient
 from .const import DOMAIN
 from .coordinator import LocalOcrCoordinator
 from .data import LocalOcrConfigEntry, LocalOcrRuntimeData
-
 from .services import async_register_services
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field, fields
 from typing import Any
 
@@ -55,7 +54,7 @@ class Info:
     arch: str
     engine: str
     presets: list[str] = field(default_factory=list)
-    limits: dict = field(default_factory=dict)
+    limits: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Info:
@@ -99,7 +98,7 @@ class LocalOcrClient:
                 except (aiohttp.ContentTypeError, ValueError):
                     body = None
                 retry = resp.headers.get("Retry-After")
-        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as err:
+        except (aiohttp.ClientError, TimeoutError) as err:
             raise CannotConnect(str(err) or type(err).__name__) from err
         except ValueError:
             # aiohttp rejects invalid header values; never echo the token.

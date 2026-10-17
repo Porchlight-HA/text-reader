@@ -13,7 +13,6 @@ from .data import LocalOcrConfigEntry
 from .entity import LocalOcrEntity
 
 
-
 async def async_setup_entry(
     hass: HomeAssistant, entry: LocalOcrConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:

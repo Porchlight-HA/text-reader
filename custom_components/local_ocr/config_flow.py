@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     NumberSelector,
@@ -58,7 +59,7 @@ class _CheckFailed(Exception):
 
 
 async def _async_check(
-    hass, url: str, token: str | None, *, read_sample: bool = True
+    hass: HomeAssistant, url: str, token: str | None, *, read_sample: bool = True
 ) -> dict[str, str]:
     """Run the connection checks; return description placeholders.
 
@@ -160,7 +161,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({vol.Required("token"): str}) if self._needs_token else None
         return self.async_show_form(
             step_id="zeroconf_confirm",
-            data_schema=schema or vol.Schema({}),
+            data_schema=schema or vol.Schema({}),  # type: ignore[arg-type]  # HA shims voluptuous to probatio
             description_placeholders={"url": self._url},
         )
 
@@ -179,7 +180,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_test()
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
+            data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {
                     vol.Required("url", default=DEFAULT_URL): str,
                     vol.Optional("token"): str,
@@ -239,7 +240,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required("token"): str}),
+            data_schema=vol.Schema({vol.Required("token"): str}),  # type: ignore[arg-type]  # HA shims voluptuous to probatio
             errors=errors,
         )
 
@@ -260,7 +261,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
+            data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {vol.Required("url", default=entry.data["url"]): str}
             ),
             errors=errors,
@@ -278,7 +279,7 @@ class LocalOcrOptionsFlow(OptionsFlow):
         opts = {**DEFAULT_OPTIONS, **self.config_entry.options}
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
+            data_schema=vol.Schema(  # type: ignore[arg-type]  # HA shims voluptuous to probatio
                 {
                     vol.Required("preset", default=opts["preset"]): SelectSelector(
                         SelectSelectorConfig(options=PRESETS, translation_key="preset")
