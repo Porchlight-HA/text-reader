@@ -482,7 +482,8 @@ async def test_ai_entity_missing_through_flow_manager(hass, aioclient_mock):
     assert _issue(hass, "ai_entity_missing")
     texts = await _issue_texts(hass, "ai_entity_missing")
     base = f"component.{DOMAIN}.issues.ai_entity_missing"
-    assert AI in texts[f"{base}.description"] or "{entity}" in texts[f"{base}.description"]
+    assert "{entity}" in texts[f"{base}.fix_flow.step.init.description"]
+    assert f"{base}.description" not in texts  # hassfest: fixable issues carry no top-level description
     assert f"{base}.fix_flow.step.init.title" in texts
     assert f"{base}.fix_flow.error.privacy_ack_required" in texts
 

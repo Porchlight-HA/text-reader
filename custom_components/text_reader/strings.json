@@ -339,7 +339,6 @@
     },
     "ai_entity_missing": {
       "title": "Your AI assistant is gone",
-      "description": "The AI assistant Text Reader used ({entity}) is gone. Pick another one.",
       "fix_flow": {
         "step": {
           "init": {
@@ -374,7 +373,6 @@
     },
     "local_unsupported_here": {
       "title": "This device can't run the Local OCR app",
-      "description": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Switch Text Reader to your AI assistant?",
       "fix_flow": {
         "step": {
           "confirm": {
