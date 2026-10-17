@@ -28,6 +28,8 @@ def _png(w=200, h=100) -> bytes:
 
 @pytest.fixture
 async def entry(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/info", json={"version": "0.1.0", "api": 1, "arch": "amd64", "engine": "rapidocr"})
+    aioclient_mock.get(f"{URL}/v1/health", json={"status": "ok", "model_state": "loaded"})
     aioclient_mock.post(f"{URL}/v1/read", json=RESULT)
     e = MockConfigEntry(
         domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
@@ -37,6 +39,7 @@ async def entry(hass, aioclient_mock):
     e.add_to_hass(hass)
     assert await hass.config_entries.async_setup(e.entry_id)
     await hass.async_block_till_done()
+    aioclient_mock.mock_calls.clear()  # drop the coordinator's setup polls
     return e
 
 

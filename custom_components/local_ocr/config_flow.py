@@ -111,6 +111,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         self._url: str = DEFAULT_URL
         self._token: str | None = None
         self._managed = False
+        self._slug: str | None = None
         self._needs_token = False
         self._placeholders: dict[str, str] | None = None
 
@@ -125,9 +126,10 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         self._url = _host_url(cfg["host"], cfg.get("port"))
         self._token = _clean_token(cfg.get("token"))
         self._managed = True
+        self._slug = discovery_info.slug
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured(
-            updates={"url": self._url, "token": self._token}
+            updates={"url": self._url, "token": self._token, "slug": self._slug}
         )
         return await self.async_step_hassio_confirm()
 
@@ -194,7 +196,12 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None and self._placeholders is not None:
             return self.async_create_entry(
                 title="Local OCR",
-                data={"url": self._url, "token": self._token, "managed": self._managed},
+                data={
+                    "url": self._url,
+                    "token": self._token,
+                    "managed": self._managed,
+                    **({"slug": self._slug} if self._slug else {}),
+                },
                 options=dict(DEFAULT_OPTIONS),
             )
         self._placeholders = None
