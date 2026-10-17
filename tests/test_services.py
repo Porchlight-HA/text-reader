@@ -557,3 +557,51 @@ async def test_ai_only_entry_with_removed_entity_gives_translated_error(hass, tm
         await _call(hass, file_path=path)
     assert err.value.translation_key == "ai_unavailable"
     assert str(err.value) == "The AI assistant for Text Reader isn't available"
+
+
+def _real_ai_entity(hass):
+    from types import SimpleNamespace
+
+    from homeassistant.components.ai_task import AITaskEntityFeature
+    from homeassistant.components.ai_task.const import DATA_COMPONENT
+
+    feats = AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
+    component = MagicMock()
+    component.get_entity = lambda eid: SimpleNamespace(supported_features=feats) if eid == AI_ENTITY else None
+    hass.data[DATA_COMPONENT] = component
+
+
+async def test_unexpected_ai_error_is_translated_ai_unavailable(hass, ai_entry, tmp_path, caplog):
+    _real_ai_entity(hass)
+    path = await _file(hass, tmp_path)
+    gen = AsyncMock(side_effect=RuntimeError("secret recognised words"))
+    with patch("homeassistant.components.ai_task.async_generate_data", gen):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, file_path=path)
+    gen.assert_awaited_once()
+    assert err.value.translation_key == "ai_unavailable"
+    assert "secret" not in str(err.value) and "secret" not in caplog.text
+    assert ai_entry.runtime_data.recent[-1]["error"] == "AiUnavailable"
+
+
+async def test_local_backend_on_ai_only_entry_says_there_is_no_app(hass, ai_entry, tmp_path):
+    path = await _file(hass, tmp_path)
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, file_path=path, backend="local")
+    assert err.value.translation_key == "no_local_app"
+    assert str(err.value) == (
+        "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, "
+        "or add the app in Text Reader's options"
+    )
+
+
+def test_config_entry_field_is_named_for_text_reader():
+    import json
+    from pathlib import Path
+
+    strings = json.loads(
+        (Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text()
+    )
+    field = strings["services"]["read_image"]["fields"]["config_entry_id"]
+    assert field["name"] == "Text Reader entry"
+    assert "Local OCR server" not in field["description"]

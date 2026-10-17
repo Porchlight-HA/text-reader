@@ -152,7 +152,8 @@
       "privacy_ack_required": "Tick the box to confirm you understand that images are sent to this assistant.",
       "ai_entity_required": "Pick the AI assistant to use with this choice.",
       "local_not_set_up": "This Text Reader was set up without the Local OCR app. To read on this device, remove Text Reader and add it again.",
-      "ai_entity_invalid": "That assistant can't read images. Pick another one."
+      "ai_entity_invalid": "That assistant can't read images. Pick another one.",
+      "local_not_set_up_app": "Install and start the Local OCR app; Text Reader will find it automatically."
     }
   },
   "selector": {
@@ -226,6 +227,9 @@
     },
     "ai_unavailable": {
       "message": "The AI assistant for Text Reader isn't available."
+    },
+    "no_local_app": {
+      "message": "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, or add the app in Text Reader's options."
     }
   },
   "services": {
@@ -234,8 +238,8 @@
       "description": "Reads the text in an image with the Local OCR app or an AI assistant and returns the result.",
       "fields": {
         "config_entry_id": {
-          "name": "Local OCR server",
-          "description": "Which Local OCR server to use. Optional when only one is set up."
+          "name": "Text Reader entry",
+          "description": "Which Text Reader entry to use. Optional when only one is set up."
         },
         "image_entity": {
           "name": "Image entity",

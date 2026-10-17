@@ -33,7 +33,7 @@ from .api import (
 )
 from .const import DOMAIN, SIGNAL_DURATION_UPDATED
 from .data import TextReaderConfigEntry, settings
-from .router import route_read
+from .router import NoLocalApp, route_read
 
 SERVICE_READ_IMAGE = "read_image"
 PRESETS = ["text", "envelope", "meter", "label"]
@@ -340,6 +340,10 @@ async def _read_with_retry(
             if monotonic() - start + delay > timeout:
                 raise timed_out from None
             await sleep(delay)
+        except NoLocalApp:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="no_local_app"
+            ) from None
         except AiUnavailable:
             # Never include the AI's error text.
             raise HomeAssistantError(
