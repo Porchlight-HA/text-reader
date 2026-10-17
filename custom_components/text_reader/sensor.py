@@ -1,4 +1,4 @@
-"""Last-duration sensor for Local OCR."""
+"""Last-duration sensor for Text Reader."""
 
 from __future__ import annotations
 
@@ -9,17 +9,17 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import SIGNAL_DURATION_UPDATED
-from .data import LocalOcrConfigEntry
-from .entity import LocalOcrEntity
+from .data import TextReaderConfigEntry
+from .entity import TextReaderEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: LocalOcrConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant, entry: TextReaderConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([LocalOcrLastDuration(entry)])
+    async_add_entities([TextReaderLastDuration(entry)])
 
 
-class LocalOcrLastDuration(LocalOcrEntity, SensorEntity):
+class TextReaderLastDuration(TextReaderEntity, SensorEntity):
     """How long the last read took."""
 
     _attr_translation_key = "last_duration"
@@ -28,7 +28,7 @@ class LocalOcrLastDuration(LocalOcrEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
 
-    def __init__(self, entry: LocalOcrConfigEntry) -> None:
+    def __init__(self, entry: TextReaderConfigEntry) -> None:
         super().__init__(entry, "last_duration")
         self._entry = entry
 

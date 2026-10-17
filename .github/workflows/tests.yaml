@@ -22,4 +22,4 @@ jobs:
       - name: Ruff
         run: ruff check .
       - name: Mypy
-        run: mypy --strict custom_components/local_ocr
+        run: mypy --strict custom_components/text_reader

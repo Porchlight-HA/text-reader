@@ -1,4 +1,4 @@
-"""Status coordinator for Local OCR."""
+"""Status coordinator for Text Reader."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .api import CannotConnect, Health, Info, LocalOcrError, Unauthorized
 from .const import DOMAIN, MIN_API
 
 if TYPE_CHECKING:
-    from .data import LocalOcrConfigEntry
+    from .data import TextReaderConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,12 +36,12 @@ class Status:
     consecutive_failures: int
 
 
-class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
+class TextReaderCoordinator(DataUpdateCoordinator[Status]):
     """Poll the Local OCR server's health."""
 
-    config_entry: LocalOcrConfigEntry
+    config_entry: TextReaderConfigEntry
 
-    def __init__(self, hass: HomeAssistant, entry: LocalOcrConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: TextReaderConfigEntry) -> None:
         super().__init__(
             hass,
             _LOGGER,

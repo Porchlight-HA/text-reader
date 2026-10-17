@@ -1,7 +1,8 @@
 {
-  "domain": "local_ocr",
-  "name": "Local OCR",
+  "domain": "text_reader",
+  "name": "Text Reader",
   "after_dependencies": [
+    "ai_task",
     "camera",
     "hassio",
     "image",
@@ -11,12 +12,12 @@
     "@Porchlight-HA"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/Porchlight-HA/ha-local-ocr",
+  "documentation": "https://github.com/Porchlight-HA/text-reader",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/Porchlight-HA/ha-local-ocr/issues",
+  "issue_tracker": "https://github.com/Porchlight-HA/text-reader/issues",
   "requirements": [],
-  "version": "0.2.0",
+  "version": "0.3.0",
   "zeroconf": [
     "_local-ocr._tcp.local."
   ]

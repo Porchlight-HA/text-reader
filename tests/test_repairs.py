@@ -1,4 +1,4 @@
-"""Tests for the Local OCR repair flow."""
+"""Tests for the Text Reader repair flow."""
 
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
@@ -12,8 +12,8 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from custom_components.local_ocr.const import DOMAIN
-from custom_components.local_ocr.repairs import (
+from custom_components.text_reader.const import DOMAIN
+from custom_components.text_reader.repairs import (
     REFRESH_AFTER_START,
     async_create_fix_flow,
 )

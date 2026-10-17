@@ -10,7 +10,7 @@ from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.local_ocr.const import DOMAIN
+from custom_components.text_reader.const import DOMAIN
 
 URL = "http://localhost:8738"
 TOKEN = "s3cret-token"
@@ -65,17 +65,17 @@ async def test_hassio_discovery_creates_entry_after_test(hass, aioclient_mock):
     assert TOKEN not in str(ph)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "Local OCR"
+    assert result["title"] == "Text Reader"
     assert result["data"] == {"url": "http://local-ocr:8738", "token": TOKEN, "managed": True, "slug": "local_ocr"}
     assert result["options"] == {"preset": "text", "min_confidence": 0.5, "timeout": 30}
     assert result["result"].unique_id == DOMAIN
 
 
 async def test_hassio_rediscovery_updates_token_and_url(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": "http://old:8738", "token": "old", "managed": True})
     entry.add_to_hass(hass)
-    with patch("custom_components.local_ocr.async_setup_entry", return_value=True) as setup:
+    with patch("custom_components.text_reader.async_setup_entry", return_value=True) as setup:
         await hass.config_entries.async_setup(entry.entry_id)
         assert setup.call_count == 1
         result = await hass.config_entries.flow.async_init(
@@ -225,7 +225,7 @@ def test_strings_have_test_failed_and_new_errors():
     import json
     from pathlib import Path
 
-    import custom_components.local_ocr as pkg
+    import custom_components.text_reader as pkg
     root = Path(pkg.__file__).parent
     strings = json.loads((root / "strings.json").read_text())
     assert strings == json.loads((root / "translations" / "en.json").read_text())
@@ -245,7 +245,7 @@ async def test_test_step_unknown(hass, aioclient_mock):
 
 async def test_reconfigure_changes_url(hass, aioclient_mock):
     new = "http://other:8738"
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": TOKEN, "managed": False})
     entry.add_to_hass(hass)
     mock_server(aioclient_mock, new)
@@ -258,7 +258,7 @@ async def test_reconfigure_changes_url(hass, aioclient_mock):
 
 
 async def test_reconfigure_error_shows_form(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": None, "managed": False})
     entry.add_to_hass(hass)
     aioclient_mock.get("http://dead:8738/v1/info", exc=aiohttp.ClientConnectionError())
@@ -270,7 +270,7 @@ async def test_reconfigure_error_shows_form(hass, aioclient_mock):
 
 
 async def test_reauth_updates_token(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": "old", "managed": False})
     entry.add_to_hass(hass)
     aioclient_mock.get(f"{URL}/v1/info", status=401, json={})
@@ -287,7 +287,7 @@ async def test_reauth_updates_token(hass, aioclient_mock):
 
 
 async def test_reauth_managed_has_no_token_field(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": "old", "managed": True, "slug": "local_ocr"})
     entry.add_to_hass(hass)
     aioclient_mock.get(f"{URL}/v1/info", status=401, json={})
@@ -300,7 +300,7 @@ async def test_reauth_managed_has_no_token_field(hass, aioclient_mock):
     hass.config_entries.async_update_entry(entry, data={**entry.data, "token": "new"})
     aioclient_mock.clear_requests()
     mock_server(aioclient_mock)
-    with patch("custom_components.local_ocr.async_setup_entry", return_value=True):
+    with patch("custom_components.text_reader.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
@@ -308,7 +308,7 @@ async def test_reauth_managed_has_no_token_field(hass, aioclient_mock):
 
 
 async def test_hassio_discovery_aborts_open_reauth(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": "http://local-ocr:8738", "token": "old", "managed": True,
                                   "slug": "local_ocr"})
     entry.add_to_hass(hass)
@@ -320,7 +320,7 @@ async def test_hassio_discovery_aborts_open_reauth(hass, aioclient_mock):
                 if f["context"]["source"] == "reauth"]
 
     assert len(reauth_flows()) == 1
-    with patch("custom_components.local_ocr.async_setup_entry", return_value=True):
+    with patch("custom_components.text_reader.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_HASSIO},
             data=hassio_info(token="fresh"))
@@ -331,7 +331,7 @@ async def test_hassio_discovery_aborts_open_reauth(hass, aioclient_mock):
 
 
 async def test_hassio_discovery_same_token_keeps_reauth(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": "http://local-ocr:8738", "token": TOKEN, "managed": True,
                                   "slug": "local_ocr"})
     entry.add_to_hass(hass)
@@ -345,7 +345,7 @@ async def test_hassio_discovery_same_token_keeps_reauth(hass, aioclient_mock):
 
 
 async def test_reauth_cannot_connect(hass, aioclient_mock):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": "old", "managed": False})
     entry.add_to_hass(hass)
     aioclient_mock.get(f"{URL}/v1/info", exc=aiohttp.ClientConnectionError())
@@ -355,7 +355,7 @@ async def test_reauth_cannot_connect(hass, aioclient_mock):
 
 
 async def test_options_flow_saves(hass):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": None, "managed": False},
                             options={"preset": "text", "min_confidence": 0.5, "timeout": 30})
     entry.add_to_hass(hass)
@@ -377,7 +377,7 @@ async def test_single_instance_abort(hass):
 
 async def test_setup_entry(hass, aioclient_mock):
     mock_server(aioclient_mock, URL)
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": TOKEN, "managed": False},
                             options={"timeout": 12})
     entry.add_to_hass(hass)
@@ -390,7 +390,7 @@ async def test_setup_entry(hass, aioclient_mock):
 
 async def test_options_change_reloads_entry(hass, aioclient_mock):
     mock_server(aioclient_mock, URL)
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": URL, "token": TOKEN, "managed": False},
                             options={"preset": "text", "min_confidence": 0.5, "timeout": 30})
     entry.add_to_hass(hass)
@@ -407,7 +407,7 @@ async def test_options_change_reloads_entry(hass, aioclient_mock):
 
 
 async def test_zeroconf_never_repoints_a_managed_entry(hass):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": "http://local-ocr:8738", "token": TOKEN, "managed": True,
                                   "slug": "local_ocr"})
     entry.add_to_hass(hass)
@@ -418,10 +418,10 @@ async def test_zeroconf_never_repoints_a_managed_entry(hass):
 
 
 async def test_zeroconf_updates_a_standalone_entry_url(hass):
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"url": "http://192.168.1.4:8738", "token": None, "managed": False})
     entry.add_to_hass(hass)
-    with patch("custom_components.local_ocr.async_setup_entry", return_value=True):
+    with patch("custom_components.text_reader.async_setup_entry", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=zc_info("0"))
         await hass.async_block_till_done()
@@ -433,7 +433,7 @@ def test_every_form_field_has_a_description():
     import json
     from pathlib import Path
 
-    strings = json.loads((Path(__file__).parents[1] / "custom_components/local_ocr/strings.json").read_text())
+    strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
     steps = [*strings["config"]["step"].values(), *strings["options"]["step"].values()]
     for step in steps:
         assert set(step.get("data", {})) == set(step.get("data_description", {})), step.get("title")

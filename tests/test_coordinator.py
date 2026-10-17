@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from custom_components.local_ocr.const import DOMAIN
+from custom_components.text_reader.const import DOMAIN
 
 URL = "http://ocr.test:8738"
 INFO = {"version": "0.1.0", "api": 1, "arch": "amd64", "engine": "rapidocr"}
@@ -28,7 +28,7 @@ async def _setup(hass, mock, *, managed=False, slug=None, info=INFO, health=HEAL
     data = {"url": URL, "token": "tok", "managed": managed}
     if slug:
         data["slug"] = slug
-    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR", data=data)
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader", data=data)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -55,7 +55,7 @@ async def test_three_failures_raise_app_not_running(hass, aioclient_mock):
     issue = _issue(hass, "app_not_running")
     assert issue.is_fixable is True
     assert issue.data == {"entry_id": entry.entry_id}
-    state = hass.states.get("binary_sensor.local_ocr_status")
+    state = hass.states.get("binary_sensor.text_reader_status")
     assert state.state == "off"
 
 
@@ -69,7 +69,7 @@ async def test_recovery_clears_issue(hass, aioclient_mock):
     aioclient_mock.get(f"{URL}/v1/health", json=HEALTH)
     await _poll(hass)
     assert _issue(hass, "app_not_running") is None
-    assert hass.states.get("binary_sensor.local_ocr_status").state == "on"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
 
 
 async def test_app_outdated_issue(hass, aioclient_mock):
@@ -88,7 +88,7 @@ async def test_model_failed_issue_has_detail(hass, aioclient_mock):
     assert issue.translation_placeholders == {"detail": "bad onnx file"}
     assert issue.is_fixable is False
     # The server still answers (status "ok"), so the connectivity sensor stays on; the repair carries the error.
-    assert hass.states.get("binary_sensor.local_ocr_status").state == "on"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
 
 
 def _health(model_state="ready", detail=None, oom_kills=0, last_oom=None):
@@ -134,7 +134,7 @@ async def test_oom_kill_since_load_raises_low_memory_then_clears(hass, aioclient
     await _set_health(hass, aioclient_mock, _health("ready", oom_kills=5))
     assert _issue(hass, "low_memory") is not None  # still within the hour
     later = dt_util.utcnow() + timedelta(hours=1, minutes=2)
-    with patch("custom_components.local_ocr.coordinator.dt_util.utcnow", return_value=later):
+    with patch("custom_components.text_reader.coordinator.dt_util.utcnow", return_value=later):
         await _set_health(hass, aioclient_mock, _health("ready", oom_kills=5))
     assert _issue(hass, "low_memory") is None
 
@@ -193,14 +193,14 @@ async def test_401_never_raises_app_not_running(hass, aioclient_mock):
 async def test_status_entity_on_off(hass, aioclient_mock):
     entry = await _setup(hass, aioclient_mock)
     reg = er.async_get(hass)
-    ent = reg.async_get("binary_sensor.local_ocr_status")
+    ent = reg.async_get("binary_sensor.text_reader_status")
     assert ent.unique_id == f"{entry.entry_id}_status"
-    assert hass.states.get("binary_sensor.local_ocr_status").state == "on"
-    assert hass.states.get("binary_sensor.local_ocr_status").attributes["device_class"] == "connectivity"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
+    assert hass.states.get("binary_sensor.text_reader_status").attributes["device_class"] == "connectivity"
     aioclient_mock.clear_requests()
     aioclient_mock.get(f"{URL}/v1/health", exc=TimeoutError)
     await _poll(hass)
-    assert hass.states.get("binary_sensor.local_ocr_status").state == "off"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "off"
 
 
 async def test_last_duration_updates_after_action(hass, aioclient_mock, tmp_path):
@@ -210,9 +210,9 @@ async def test_last_duration_updates_after_action(hass, aioclient_mock, tmp_path
 
     entry = await _setup(hass, aioclient_mock)
     reg = er.async_get(hass)
-    ent = reg.async_get("sensor.local_ocr_last_duration")
+    ent = reg.async_get("sensor.text_reader_last_duration")
     assert ent.disabled_by is er.RegistryEntryDisabler.INTEGRATION
-    reg.async_update_entity("sensor.local_ocr_last_duration", disabled_by=None)
+    reg.async_update_entity("sensor.text_reader_last_duration", disabled_by=None)
     with patch.object(hass.config, "is_allowed_path", return_value=True):
         await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
@@ -224,7 +224,7 @@ async def test_last_duration_updates_after_action(hass, aioclient_mock, tmp_path
             DOMAIN, "read_image", {"file_path": str(p)}, blocking=True, return_response=True
         )
     await hass.async_block_till_done()
-    state = hass.states.get("sensor.local_ocr_last_duration")
+    state = hass.states.get("sensor.text_reader_last_duration")
     assert state.state == "321"
     assert state.attributes["unit_of_measurement"] == "ms"
 

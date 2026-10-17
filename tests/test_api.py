@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
     AiohttpClientMockResponse,
 )
 
-from custom_components.local_ocr.api import (
+from custom_components.text_reader.api import (
     CONNECT_TIMEOUT,
     Busy,
     CannotConnect,
@@ -268,7 +268,7 @@ async def test_body_read_payload_error_is_cannot_connect(hass, aioclient_mock):
 
 
 def test_api_module_has_no_ha_imports():
-    src = Path(__file__).parent.parent / "custom_components/local_ocr/api.py"
+    src = Path(__file__).parent.parent / "custom_components/text_reader/api.py"
     tree = ast.parse(src.read_text())
     mods = set()
     for node in ast.walk(tree):

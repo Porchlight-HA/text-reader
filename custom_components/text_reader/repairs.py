@@ -1,4 +1,4 @@
-"""Repair flows for Local OCR."""
+"""Repair flows for Text Reader."""
 
 from __future__ import annotations
 

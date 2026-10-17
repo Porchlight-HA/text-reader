@@ -1,4 +1,4 @@
-"""Tests for the local_ocr.read_image action."""
+"""Tests for the text_reader.read_image action."""
 
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,8 +11,8 @@ from homeassistant.setup import async_setup_component
 from PIL import Image
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.local_ocr.api import Busy, LocalOcrClient, Timeout
-from custom_components.local_ocr.const import DOMAIN
+from custom_components.text_reader.api import Busy, LocalOcrClient, Timeout
+from custom_components.text_reader.const import DOMAIN
 
 URL = "http://ocr.test:8738"
 RESULT = {"text": "synthetic", "ms": 12, "blocks": [], "fields": {}}
@@ -31,7 +31,7 @@ async def entry(hass, aioclient_mock):
                                                   "memory": {"oom_kills": 0, "last_oom": None}})
     aioclient_mock.post(f"{URL}/v1/read", json=RESULT)
     e = MockConfigEntry(
-        domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
         data={"url": URL, "token": "tok"},
         options={"preset": "text", "min_confidence": 0.5, "timeout": 30},
     )
@@ -152,7 +152,7 @@ def _exception_strings():
     import json
     from pathlib import Path
 
-    import custom_components.local_ocr as pkg
+    import custom_components.text_reader as pkg
     return json.loads((Path(pkg.__file__).parent / "strings.json").read_text())["exceptions"]
 
 
@@ -203,7 +203,7 @@ async def test_busy_retries_then_succeeds(hass, entry, tmp_path):
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     sleep = AsyncMock()
     read = AsyncMock(side_effect=[Busy(5), Busy(5), RESULT])
-    with patch("custom_components.local_ocr.services.sleep", sleep), \
+    with patch("custom_components.text_reader.services.sleep", sleep), \
             patch.object(LocalOcrClient, "read", read):
         assert await _call(hass, file_path=str(p)) == RESULT
     assert [c.args[0] for c in sleep.call_args_list] == [5, 5]
@@ -220,8 +220,8 @@ async def test_busy_until_timeout_raises_timeout(hass, entry, tmp_path):
         clock[0] += d
 
     read = AsyncMock(side_effect=Busy(5))
-    with patch("custom_components.local_ocr.services.sleep", fake_sleep), \
-            patch("custom_components.local_ocr.services.monotonic", lambda: clock[0]), \
+    with patch("custom_components.text_reader.services.sleep", fake_sleep), \
+            patch("custom_components.text_reader.services.monotonic", lambda: clock[0]), \
             patch.object(LocalOcrClient, "read", read):
         with pytest.raises(HomeAssistantError) as err:
             await _call(hass, file_path=str(p))
@@ -240,8 +240,8 @@ async def test_busy_budget_counts_request_time(hass, entry, tmp_path):
         clock[0] += 20
         raise Busy(5)
 
-    with patch("custom_components.local_ocr.services.sleep", AsyncMock()), \
-            patch("custom_components.local_ocr.services.monotonic", lambda: clock[0]), \
+    with patch("custom_components.text_reader.services.sleep", AsyncMock()), \
+            patch("custom_components.text_reader.services.monotonic", lambda: clock[0]), \
             patch.object(LocalOcrClient, "read", slow_read):
         with pytest.raises(HomeAssistantError) as err:
             await _call(hass, file_path=str(p))
@@ -253,7 +253,7 @@ async def test_busy_retry_after_clamped(hass, entry, tmp_path):
     p.write_bytes(_png())
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     sleep = AsyncMock()
-    with patch("custom_components.local_ocr.services.sleep", sleep), \
+    with patch("custom_components.text_reader.services.sleep", sleep), \
             patch.object(LocalOcrClient, "read", AsyncMock(side_effect=[Busy(0), RESULT])):
         await _call(hass, file_path=str(p))
     assert sleep.call_args.args[0] == 0.5
@@ -272,7 +272,7 @@ async def test_media_source_remote_relative(hass, entry, aioclient_mock):
     resolved = MagicMock(path=None, url="/api/p.png")
     with patch("homeassistant.components.media_source.async_resolve_media",
                AsyncMock(return_value=resolved)), \
-            patch("custom_components.local_ocr.services.get_url",
+            patch("custom_components.text_reader.services.get_url",
                   return_value="http://ha.test:8123"):
         assert await _call(hass, media_content_id="media-source://x/p") == RESULT
 
@@ -283,7 +283,7 @@ async def test_media_source_relative_no_url(hass, entry):
     resolved = MagicMock(path=None, url="/api/p.png")
     with patch("homeassistant.components.media_source.async_resolve_media",
                AsyncMock(return_value=resolved)), \
-            patch("custom_components.local_ocr.services.get_url",
+            patch("custom_components.text_reader.services.get_url",
                   side_effect=NoURLAvailableError):
         with pytest.raises(HomeAssistantError) as err:
             await _call(hass, media_content_id="media-source://x/p")
@@ -388,7 +388,7 @@ async def test_directory_is_not_a_file(hass, entry, tmp_path):
 
 
 async def test_oversized_file_not_read_or_sent(hass, entry, aioclient_mock, tmp_path):
-    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+    from custom_components.text_reader.services import MAX_IMAGE_BYTES
 
     p = tmp_path / "big.png"
     p.write_bytes(b"\0" * (MAX_IMAGE_BYTES + 1))
@@ -400,7 +400,7 @@ async def test_oversized_file_not_read_or_sent(hass, entry, aioclient_mock, tmp_
 
 
 async def test_file_at_the_cap_is_sent(hass, entry, aioclient_mock, tmp_path):
-    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+    from custom_components.text_reader.services import MAX_IMAGE_BYTES
 
     p = tmp_path / "edge.png"
     p.write_bytes(b"\0" * MAX_IMAGE_BYTES)
@@ -409,7 +409,7 @@ async def test_file_at_the_cap_is_sent(hass, entry, aioclient_mock, tmp_path):
 
 
 async def test_oversized_remote_media_rejected(hass, entry, aioclient_mock):
-    from custom_components.local_ocr.services import MAX_IMAGE_BYTES
+    from custom_components.text_reader.services import MAX_IMAGE_BYTES
 
     aioclient_mock.get("http://media.test/big.png", content=b"\0" * (MAX_IMAGE_BYTES + 1))
     resolved = MagicMock(path=None, url="http://media.test/big.png")
@@ -420,7 +420,7 @@ async def test_oversized_remote_media_rejected(hass, entry, aioclient_mock):
 
 
 async def test_unexpected_client_error_is_translated(hass, entry, tmp_path):
-    from custom_components.local_ocr.api import LocalOcrError
+    from custom_components.text_reader.api import LocalOcrError
 
     p = tmp_path / "a.png"
     p.write_bytes(_png())

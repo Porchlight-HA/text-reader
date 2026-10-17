@@ -1,4 +1,4 @@
-"""Status binary sensor for Local OCR."""
+"""Status binary sensor for Text Reader."""
 
 from __future__ import annotations
 
@@ -8,24 +8,24 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .data import LocalOcrConfigEntry
-from .entity import LocalOcrEntity
+from .data import TextReaderConfigEntry
+from .entity import TextReaderEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: LocalOcrConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant, entry: TextReaderConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([LocalOcrStatusSensor(entry)])
+    async_add_entities([TextReaderStatusSensor(entry)])
 
 
-class LocalOcrStatusSensor(LocalOcrEntity, BinarySensorEntity):
+class TextReaderStatusSensor(TextReaderEntity, BinarySensorEntity):
     """On when the server answers and reports ok."""
 
     _attr_translation_key = "status"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, entry: LocalOcrConfigEntry) -> None:
+    def __init__(self, entry: TextReaderConfigEntry) -> None:
         super().__init__(entry, "status")
 
     @property

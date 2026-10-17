@@ -1,4 +1,4 @@
-"""Runtime data for the Local OCR config entry."""
+"""Runtime data for the Text Reader config entry."""
 
 from __future__ import annotations
 
@@ -11,17 +11,17 @@ from homeassistant.config_entries import ConfigEntry
 from .api import LocalOcrClient
 
 if TYPE_CHECKING:
-    from .coordinator import LocalOcrCoordinator
+    from .coordinator import TextReaderCoordinator
 
 
 @dataclass
-class LocalOcrRuntimeData:
+class TextReaderRuntimeData:
     """Per-entry runtime state."""
 
     client: LocalOcrClient
-    coordinator: LocalOcrCoordinator | None = None
+    coordinator: TextReaderCoordinator | None = None
     recent: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
     last_duration_ms: int | None = None
 
 
-type LocalOcrConfigEntry = ConfigEntry[LocalOcrRuntimeData]
+type TextReaderConfigEntry = ConfigEntry[TextReaderRuntimeData]

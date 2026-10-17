@@ -1,6 +1,6 @@
 {
   "config": {
-    "flow_title": "Local OCR",
+    "flow_title": "Text Reader",
     "step": {
       "hassio_confirm": {
         "title": "Local OCR app",
@@ -51,7 +51,7 @@
         "description": "Local OCR rejected the saved access token. Restart the Local OCR app (Settings > Apps > Local OCR > Restart): when it starts it gives Home Assistant its current token. Then select Submit."
       },
       "reconfigure": {
-        "title": "Reconfigure Local OCR",
+        "title": "Reconfigure Text Reader",
         "data": {
           "url": "URL"
         },
@@ -70,8 +70,8 @@
       "unknown": "Unexpected error. Check the Home Assistant log."
     },
     "abort": {
-      "already_configured": "Local OCR is already configured.",
-      "single_instance_allowed": "Only one Local OCR server can be configured.",
+      "already_configured": "Text Reader is already configured.",
+      "single_instance_allowed": "Only one Text Reader can be configured.",
       "reauth_successful": "The access token was updated.",
       "reconfigure_successful": "The server address was updated."
     }
@@ -79,7 +79,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Local OCR options",
+        "title": "Text Reader options",
         "data": {
           "preset": "Default preset",
           "min_confidence": "Minimum confidence",
@@ -105,7 +105,7 @@
   },
   "exceptions": {
     "not_loaded": {
-      "message": "Local OCR is not set up or not loaded."
+      "message": "Text Reader is not set up or not loaded."
     },
     "exactly_one_source": {
       "message": "Provide exactly one of image_entity, camera_entity, file_path or media_content_id."
@@ -129,7 +129,7 @@
       "message": "The image is too large (max 10 MB, 40 megapixels)."
     },
     "unsupported_image": {
-      "message": "The file isn't an image Local OCR can read."
+      "message": "The file isn't an image Text Reader can read."
     },
     "bad_request": {
       "message": "The request was invalid (check region/frame)."
@@ -153,7 +153,7 @@
       "message": "The region must have non-negative x and y, a positive width and height, and use either all fractions (0–1) or all pixels."
     },
     "unexpected_error": {
-      "message": "Unexpected Local OCR error ({error}). Check the Home Assistant log."
+      "message": "Unexpected Text Reader error ({error}). Check the Home Assistant log."
     }
   },
   "services": {

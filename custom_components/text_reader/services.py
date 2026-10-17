@@ -1,4 +1,4 @@
-"""The local_ocr.read_image action."""
+"""The text_reader.read_image action."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from .api import (
     Unauthorized,
 )
 from .const import DOMAIN, SIGNAL_DURATION_UPDATED
-from .data import LocalOcrConfigEntry
+from .data import TextReaderConfigEntry
 
 SERVICE_READ_IMAGE = "read_image"
 PRESETS = ["text", "envelope", "meter", "label"]
@@ -69,7 +69,7 @@ READ_IMAGE_SCHEMA = vol.Schema(
 )
 
 
-def _get_entry(hass: HomeAssistant, entry_id: str | None) -> LocalOcrConfigEntry:
+def _get_entry(hass: HomeAssistant, entry_id: str | None) -> TextReaderConfigEntry:
     loaded = [
         e
         for e in hass.config_entries.async_loaded_entries(DOMAIN)
@@ -262,7 +262,7 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
 
 
 def _record(
-    entry: LocalOcrConfigEntry,
+    entry: TextReaderConfigEntry,
     result: dict[str, Any] | None,
     preset: str,
     elapsed: float | None,
@@ -287,7 +287,7 @@ def _record(
 
 async def _read_with_retry(
     hass: HomeAssistant,
-    entry: LocalOcrConfigEntry,
+    entry: TextReaderConfigEntry,
     image: bytes,
     preset: str,
     min_conf: float,
@@ -360,7 +360,7 @@ async def _read_with_retry(
 
 
 def async_register_services(hass: HomeAssistant) -> None:
-    """Register the Local OCR actions."""
+    """Register the Text Reader actions."""
 
     async def handle(call: ServiceCall) -> ServiceResponse:
         return await _read_image(hass, call)

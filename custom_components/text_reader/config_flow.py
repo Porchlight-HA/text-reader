@@ -1,4 +1,4 @@
-"""Config flow for Local OCR."""
+"""Config flow for Text Reader."""
 
 from __future__ import annotations
 
@@ -115,8 +115,8 @@ async def _async_check(
     }
 
 
-class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Local OCR."""
+class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Text Reader."""
 
     VERSION = 1
 
@@ -129,8 +129,8 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         self._placeholders: dict[str, str] | None = None
 
     @staticmethod
-    def async_get_options_flow(config_entry: ConfigEntry) -> LocalOcrOptionsFlow:
-        return LocalOcrOptionsFlow()
+    def async_get_options_flow(config_entry: ConfigEntry) -> TextReaderOptionsFlow:
+        return TextReaderOptionsFlow()
 
     # --- discovery -------------------------------------------------------
 
@@ -223,7 +223,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None and self._placeholders is not None:
             return self.async_create_entry(
-                title="Local OCR",
+                title="Text Reader",
                 data={
                     "url": self._url,
                     "token": self._token,
@@ -321,7 +321,7 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class LocalOcrOptionsFlow(OptionsFlowWithReload):
+class TextReaderOptionsFlow(OptionsFlowWithReload):
     """Options: default preset, confidence, timeout. Saving reloads the entry so changes take effect."""
 
     async def async_step_init(

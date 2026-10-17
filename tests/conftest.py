@@ -1,4 +1,4 @@
-"""Shared fixtures for Local OCR tests."""
+"""Shared fixtures for Text Reader tests."""
 
 import pytest
 

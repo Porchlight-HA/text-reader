@@ -1,4 +1,4 @@
-"""Tests for Local OCR diagnostics."""
+"""Tests for Text Reader diagnostics."""
 
 import json
 from io import BytesIO
@@ -8,8 +8,8 @@ from homeassistant.components import image as _image  # noqa: F401
 from PIL import Image
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.local_ocr.const import DOMAIN
-from custom_components.local_ocr.diagnostics import (
+from custom_components.text_reader.const import DOMAIN
+from custom_components.text_reader.diagnostics import (
     async_get_config_entry_diagnostics,
 )
 
@@ -37,7 +37,7 @@ async def _setup(hass, aioclient_mock):
     entry = MockConfigEntry(
         domain=DOMAIN,
         unique_id=DOMAIN,
-        title="Local OCR",
+        title="Text Reader",
         data={"url": URL, "token": "s3cret-token"},
         options={"preset": "text", "min_confidence": 0.5, "timeout": 30},
     )
@@ -116,7 +116,7 @@ async def test_diagnostics_strips_url_credentials(hass, aioclient_mock) -> None:
         json={"status": "ok", "model_state": "ready"},
     )
     entry = MockConfigEntry(
-        domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
         data={"url": "http://user:hunter2pw@ocr.test:8738/base", "token": "t"},
     )
     entry.add_to_hass(hass)

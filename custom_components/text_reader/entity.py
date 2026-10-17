@@ -1,4 +1,4 @@
-"""Base entity for Local OCR."""
+"""Base entity for Text Reader."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import LocalOcrCoordinator, Status
-from .data import LocalOcrConfigEntry
+from .coordinator import Status, TextReaderCoordinator
+from .data import TextReaderConfigEntry
 
 
-class LocalOcrEntity(CoordinatorEntity[LocalOcrCoordinator]):
-    """Entity bound to the single Local OCR service device."""
+class TextReaderEntity(CoordinatorEntity[TextReaderCoordinator]):
+    """Entity bound to the single Text Reader service device."""
 
     _attr_has_entity_name = True
 
-    def __init__(self, entry: LocalOcrConfigEntry, key: str) -> None:
+    def __init__(self, entry: TextReaderConfigEntry, key: str) -> None:
         coordinator = entry.runtime_data.coordinator
         assert coordinator is not None
         super().__init__(coordinator)
@@ -24,6 +24,6 @@ class LocalOcrEntity(CoordinatorEntity[LocalOcrCoordinator]):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             entry_type=DeviceEntryType.SERVICE,
-            name="Local OCR",
+            name="Text Reader",
             sw_version=status.info.version if status and status.info else None,
         )

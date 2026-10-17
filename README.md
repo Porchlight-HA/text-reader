@@ -1,6 +1,6 @@
-# Local OCR for Home Assistant
+# Text Reader for Home Assistant
 
-Read text from camera snapshots, images and files, entirely on your own hardware. Local OCR is a Home Assistant integration that talks to the **Local OCR App** (a small OCR server built on RapidOCR). It adds one response action, `local_ocr.read_image`, which returns the recognised text, positioned text blocks and, with a preset, structured fields (envelope addressee, meter value, package tracking numbers).
+Read text from camera snapshots, images and files, entirely on your own hardware. Text Reader is a Home Assistant integration that talks to the **Local OCR App** (a small OCR server built on RapidOCR). It adds one response action, `text_reader.read_image`, which returns the recognised text, positioned text blocks and, with a preset, structured fields (envelope addressee, meter value, package tracking numbers).
 
 Nothing leaves your network, and no cloud account or API key is involved.
 
@@ -13,17 +13,17 @@ Nothing leaves your network, and no cloud account or API key is involved.
    <!-- The addon slug 490c75da_local_ocr is computed (sha1 of the lowercased repo URL, first 8 hex chars), not verified on a live Supervisor. -->
    If the button does not open the App, open Settings > Apps > Install app, then Local OCR.
 3. **Install the integration via HACS.**
-   [![Open the Local OCR repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Porchlight-HA&repository=ha-local-ocr&category=integration)
+   [![Open the Text Reader repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Porchlight-HA&repository=text-reader&category=integration)
    Restart Home Assistant after the download.
 4. **Accept the discovery prompt.** Home Assistant shows "Local OCR discovered: Set up?". Select Submit. The setup tests itself on a bundled synthetic sample before saving anything.
    If no prompt appears (for example you use a Container install), add the integration by hand:
-   [![Start the Local OCR config flow.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=local_ocr)
+   [![Start the Text Reader config flow.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=text_reader)
 
 ### Container users
 
 If you run Home Assistant Container (no Supervisor) you run the OCR server as a plain Docker container. The App's `DOCS.md` in [Porchlight-HA/local-ocr](https://github.com/Porchlight-HA/local-ocr) has the exact `docker run` command, including how to set `LOCAL_OCR_TOKEN` so the API requires a bearer token. Then add the integration and enter `http://<docker-host>:8738` plus the token.
 
-## The action: `local_ocr.read_image`
+## The action: `text_reader.read_image`
 
 A response action: call it with `response_variable` and use the result in the rest of your automation or script.
 
@@ -40,14 +40,14 @@ Optional fields:
 
 | Field | Meaning |
 |---|---|
-| `config_entry_id` | Which Local OCR entry to use. Only needed with more than one |
+| `config_entry_id` | Which Text Reader entry to use. Only needed with more than one |
 | `preset` | `text`, `envelope`, `meter` or `label`. Defaults to the integration option |
 | `region` | `{x, y, w, h}` crop applied before OCR. See below |
 | `min_confidence` | 0 to 1. Drops blocks below this confidence. Defaults to the integration option (0.5) |
 | `all_frames` | For animated images, read every frame instead of the first |
 
 ```yaml
-action: local_ocr.read_image
+action: text_reader.read_image
 data: {camera_entity: camera.porch, preset: label}
 response_variable: ocr
 ```
@@ -55,7 +55,7 @@ response_variable: ocr
 Reading a file, for example a scanned envelope:
 
 ```yaml
-action: local_ocr.read_image
+action: text_reader.read_image
 data:
   file_path: /media/scans/envelope.jpg
   preset: envelope
@@ -91,7 +91,7 @@ Tracking numbers in `label`, and their limits:
 
 ## Text extraction contract v1
 
-local_ocr implements this contract. Any other integration can implement it too, and consumers can then accept any "text extractor" without depending on local_ocr.
+Text Reader implements this contract. Any other integration can implement it too, and consumers can then accept any "text extractor" without depending on Text Reader.
 
 - A **response-returning action**. It accepts `image_entity`/`file_path`/`media_content_id` and an optional `preset`, and returns at least `text: str`. Optionally it also returns `blocks: [{text, confidence, box, line}]` and `fields: {…}`.
 - `text` has one line per visual line of the image, top to bottom. Blocks on the same line (same `line` number) are joined with a single space; lines are separated by `\n`.
@@ -112,7 +112,7 @@ Repairs appear under Settings, System, Repairs and clear themselves when the pro
 
 ## Privacy
 
-Images and recognised text are **never stored or logged**. The App writes only its access token to disk. Logs contain sizes and timings, never content. Diagnostics (Settings, Devices and services, Local OCR, Download diagnostics) contain the App's version and health plus the last 20 requests as timing, preset, image size, block count and error class. They contain **no text** and the token is redacted.
+Images and recognised text are **never stored or logged**. The App writes only its access token to disk. Logs contain sizes and timings, never content. Diagnostics (Settings, Devices and services, Text Reader, Download diagnostics) contain the App's version and health plus the last 20 requests as timing, preset, image size, block count and error class. They contain **no text** and the token is redacted.
 
 **Automation traces keep the response.** Home Assistant stores the last traces of each automation and script in `.storage/trace.saved_traces`, including `response_variable` values, so recognised text ends up there. For automations that read sensitive images (mail, for example), turn stored traces off for that automation:
 

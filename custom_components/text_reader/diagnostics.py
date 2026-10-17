@@ -1,4 +1,4 @@
-"""Diagnostics for Local OCR (never includes image bytes or recognized text)."""
+"""Diagnostics for Text Reader (never includes image bytes or recognized text)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .data import LocalOcrConfigEntry
+from .data import TextReaderConfigEntry
 
 TO_REDACT = {"token"}
 
@@ -25,7 +25,7 @@ def _strip_userinfo(url: Any) -> Any:
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: LocalOcrConfigEntry
+    hass: HomeAssistant, entry: TextReaderConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     runtime = entry.runtime_data

@@ -4,7 +4,7 @@ read_image:
       required: false
       selector:
         config_entry:
-          integration: local_ocr
+          integration: text_reader
     image_entity:
       required: false
       selector:

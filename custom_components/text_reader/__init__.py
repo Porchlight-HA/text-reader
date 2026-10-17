@@ -1,4 +1,4 @@
-"""Local OCR integration."""
+"""Text Reader integration."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from homeassistant.helpers.typing import ConfigType
 
 from .api import LocalOcrClient
 from .const import DOMAIN
-from .coordinator import LocalOcrCoordinator
-from .data import LocalOcrConfigEntry, LocalOcrRuntimeData
+from .coordinator import TextReaderCoordinator
+from .data import TextReaderConfigEntry, TextReaderRuntimeData
 from .services import async_register_services
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
@@ -20,28 +20,28 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the Local OCR actions."""
+    """Register the Text Reader actions."""
     async_register_services(hass)
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: LocalOcrConfigEntry) -> bool:
-    """Set up Local OCR from a config entry."""
+async def async_setup_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -> bool:
+    """Set up Text Reader from a config entry."""
     client = LocalOcrClient(
         async_get_clientsession(hass),
         entry.data["url"],
         entry.data.get("token"),
         entry.options.get("timeout", 30),
     )
-    entry.runtime_data = LocalOcrRuntimeData(client=client)
-    coordinator = LocalOcrCoordinator(hass, entry)
+    entry.runtime_data = TextReaderRuntimeData(client=client)
+    coordinator = TextReaderCoordinator(hass, entry)
     entry.runtime_data.coordinator = coordinator
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: LocalOcrConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -> bool:
     """Unload a config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     runtime = getattr(entry, "runtime_data", None)
