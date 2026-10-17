@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 
 from .api import LocalOcrClient
 
@@ -22,6 +23,8 @@ class TextReaderRuntimeData:
     coordinator: TextReaderCoordinator | None = None
     recent: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20))
     last_duration_ms: int | None = None
+    # The platforms set up for this entry; unload uses exactly these (discovery can change the data).
+    platforms: list[Platform] = field(default_factory=list)
 
 
 type TextReaderConfigEntry = ConfigEntry[TextReaderRuntimeData]

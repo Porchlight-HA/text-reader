@@ -332,7 +332,7 @@ async def test_ai_error_not_chained_in_weak_fallback(hass):
     assert "secret" not in repr(result)
 
 
-async def test_ai_only_entry_sets_up_and_unloads(hass):
+async def test_ai_only_entry_sets_up_and_unloads(hass, caplog):
     from homeassistant.config_entries import ConfigEntryState
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -349,6 +349,8 @@ async def test_ai_only_entry_sets_up_and_unloads(hass):
     assert entry.runtime_data.coordinator is not None  # AI-only entries get status entities (0.3)
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED
+    # HA logs (and older versions raised) when asked to unload a platform never set up.
+    assert "Ignored unload request" not in caplog.text
 
 
 def _same_in_region_gif() -> bytes:
@@ -475,3 +477,29 @@ async def test_seam_auto_local_down_and_ai_crashes_raises_local_error(hass):
         CannotConnect
     ):
         await _route(hass, entry)
+
+
+async def test_unload_after_discovery_changed_the_entry(hass, caplog):
+    # Discovery can add the App's url to an AI-only entry: unload must still unload exactly the
+    # platforms that were set up (binary_sensor only), not the ones the new data implies.
+    from homeassistant.config_entries import ConfigEntryState
+    from homeassistant.setup import async_setup_component
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.text_reader.const import DOMAIN
+
+    assert await async_setup_component(hass, "sensor", {})  # loaded on every real install
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="Text Reader", data={"ai_entity": AI_ENTITY}
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert [p.value for p in entry.runtime_data.platforms] == ["binary_sensor"]
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, "url": "http://x:8738", "managed": True}
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert entry.state is ConfigEntryState.NOT_LOADED
+    # HA logs (and older versions raised) when asked to unload a platform never set up.
+    assert "Ignored unload request" not in caplog.text

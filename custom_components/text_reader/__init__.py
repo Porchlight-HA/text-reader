@@ -53,14 +53,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -
     if settings(entry).backend in LOCAL_BACKENDS and is_hassio(hass):
         coordinator.local_unsupported = not (await local_supported(hass))[0]
     await coordinator.async_config_entry_first_refresh()
-    await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
+    entry.runtime_data.platforms = _platforms(entry)
+    await hass.config_entries.async_forward_entry_setups(entry, entry.runtime_data.platforms)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TextReaderConfigEntry) -> bool:
     """Unload a config entry."""
-    unloaded = await hass.config_entries.async_unload_platforms(entry, _platforms(entry))
     runtime = getattr(entry, "runtime_data", None)
+    # Exactly what setup forwarded: discovery may have added the App's url since.
+    platforms = runtime.platforms if runtime is not None else _platforms(entry)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unloaded and runtime is not None and runtime.coordinator is not None:
         runtime.coordinator.clear_issues()
     return unloaded
