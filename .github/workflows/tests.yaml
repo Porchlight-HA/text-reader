@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install requirements
-        run: pip install -r requirements_test.txt ruff mypy
+        run: pip install -r requirements_test.txt
       - name: Run tests
         run: pytest -q tests
       - name: Ruff

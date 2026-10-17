@@ -104,3 +104,24 @@ async def test_failed_read_recorded_with_error_class(
     rec = (await async_get_config_entry_diagnostics(hass, entry))["recent"][0]
     assert rec["error"] == "ImageRejected"
     assert rec["width"] is None and rec["blocks"] == 0
+
+
+async def test_diagnostics_strips_url_credentials(hass, aioclient_mock) -> None:
+    aioclient_mock.get(
+        "http://ocr.test:8738/v1/info",
+        json={"version": "0.1.0", "api": 1, "arch": "amd64", "engine": "rapidocr"},
+    )
+    aioclient_mock.get(
+        "http://ocr.test:8738/v1/health",
+        json={"status": "ok", "model_state": "ready"},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
+        data={"url": "http://user:hunter2pw@ocr.test:8738/base", "token": "t"},
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert "hunter2pw" not in json.dumps(diag)
+    assert diag["entry"]["data"]["url"] == "http://ocr.test:8738/base"
