@@ -193,6 +193,10 @@ When you report a problem, please attach a **synthetic** repro image, never a re
 
 Printed text on envelopes, labels and signs is the sweet spot. For the cases above an AI assistant (the AI or both choice) may do better.
 
+## Known limitations
+
+With some assistant integrations, Home Assistant may log a "blocking call" warning while it reads the image; this comes from that integration.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
