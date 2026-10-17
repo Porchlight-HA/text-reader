@@ -10,6 +10,8 @@ Nothing leaves your network, and no cloud account or API key is involved.
    [![Add the Local OCR App repository to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Porchlight-HA/local-ocr)
 2. **Install the App** and start it.
    [![Show the Local OCR App in your Home Assistant.](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=490c75da_local_ocr)
+   <!-- The addon slug 490c75da_local_ocr is computed (sha1 of the lowercased repo URL, first 8 hex chars), not verified on a live Supervisor. -->
+   If the button does not open the App, open Settings > Apps > Install app, then Local OCR.
 3. **Install the integration via HACS.**
    [![Open the Local OCR repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Porchlight-HA&repository=ha-local-ocr&category=integration)
    Restart Home Assistant after the download.
@@ -78,7 +80,7 @@ homeassistant:
 |---|---|
 | `text` (default) | `text` (joined lines) and `blocks` (each with `text`, `confidence`, `box`) |
 | `envelope` | Everything in `text`, plus `fields`: `addressee`, `return_address`, `indicia`, `markers` (USPS bulk-mail tokens such as PRSRT STD or ECRWSS) and `generic_addressee`. These are hints only; the decision what to do with a piece of mail is yours |
-| `meter` | Digits and the decimal point only, as `fields.value` (a number) plus per-digit confidence. Use `region` to crop to the dial |
+| `meter` | Digits and the decimal point only, as `fields.value` (a number, or null if unparseable), `fields.digits` (the recognised digits as a string) and `fields.confidence` (one number for the whole reading). Use `region` to crop to the dial |
 | `label` | `fields.tracking`: a list of `{carrier, number}` (UPS, USPS, FedEx, DHL), plus the ship-to block |
 
 ## Text extraction contract v1
