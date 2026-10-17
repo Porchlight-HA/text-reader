@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.hassio import AddonError, AddonManager
 from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
@@ -28,6 +27,8 @@ class StartAppRepairFlow(ConfirmRepairFlow):
             if self._entry_id
             else None
         )
+        from homeassistant.components.hassio import AddonError, AddonManager
+
         slug = entry.data.get("slug") if entry else None
         if not slug:
             return self.async_abort(reason="cannot_start")
