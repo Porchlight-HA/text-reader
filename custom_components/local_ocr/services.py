@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
+from asyncio import sleep
 from io import BytesIO
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import voluptuous as vol
@@ -31,6 +32,7 @@ from .const import DOMAIN
 from .data import LocalOcrConfigEntry
 
 SERVICE_READ_IMAGE = "read_image"
+PRESETS = ["text", "envelope", "meter", "label"]
 SOURCES = ("image_entity", "camera_entity", "file_path", "media_content_id")
 
 REGION_SCHEMA = vol.Schema(
@@ -49,7 +51,7 @@ READ_IMAGE_SCHEMA = vol.Schema(
         vol.Optional("camera_entity"): cv.entity_id,
         vol.Optional("file_path"): cv.string,
         vol.Optional("media_content_id"): cv.string,
-        vol.Optional("preset"): cv.string,
+        vol.Optional("preset"): vol.In(PRESETS),
         vol.Optional("region"): REGION_SCHEMA,
         vol.Optional("min_confidence"): vol.All(
             vol.Coerce(float), vol.Range(min=0, max=1)
@@ -129,9 +131,9 @@ async def _load_image(hass: HomeAssistant, call_data: dict[str, Any]) -> bytes:
         except OSError as err:
             raise _no_image(media_id) from err
     url = resolved.url
-    if url.startswith("/"):
-        url = f"{get_url(hass)}{url}"
     try:
+        if url.startswith("/"):
+            url = f"{get_url(hass)}{url}"
         async with async_get_clientsession(hass).get(url) as resp:
             resp.raise_for_status()
             return await resp.read()
@@ -146,11 +148,20 @@ def _image_size(data: bytes) -> tuple[int, int]:
         return img.size
 
 
+def _invalid_region() -> ServiceValidationError:
+    return ServiceValidationError(
+        translation_domain=DOMAIN, translation_key="invalid_region"
+    )
+
+
 async def _region_px(
     hass: HomeAssistant, region: dict[str, float], image: bytes
 ) -> tuple[int, int, int, int]:
     x, y, w, h = (region[k] for k in ("x", "y", "w", "h"))
-    if max(x, y, w, h) <= 1:
+    values = (x, y, w, h)
+    if x < 0 or y < 0 or w <= 0 or h <= 0:
+        raise _invalid_region()
+    if max(values) <= 1:
         try:
             width, height = await hass.async_add_executor_job(_image_size, image)
         except Exception as err:  # noqa: BLE001 - PIL raises many types
@@ -159,8 +170,14 @@ async def _region_px(
                 translation_key="image_rejected",
                 translation_placeholders={"code": "unsupported_image"},
             ) from err
-        return (round(x * width), round(y * height), round(w * width), round(h * height))
-    return (round(x), round(y), round(w), round(h))
+        px = (round(x * width), round(y * height), round(w * width), round(h * height))
+    else:
+        if any(0 < v < 1 for v in values):
+            raise _invalid_region()
+        px = (round(x), round(y), round(w), round(h))
+    if px[2] < 1 or px[3] < 1:
+        raise _invalid_region()
+    return px
 
 
 async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse:
@@ -181,7 +198,7 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
     )
 
     client = entry.runtime_data.client
-    waited = 0.0
+    start = monotonic()
     while True:
         try:
             return await client.read(
@@ -192,14 +209,14 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
                 all_frames=data.get("all_frames", False),
             )
         except Busy as busy:
-            if waited + busy.retry_after > timeout:
+            delay = max(busy.retry_after, 0.5)
+            if monotonic() - start + delay > timeout:
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key="timeout",
                     translation_placeholders={"timeout": f"{timeout:g}"},
                 ) from None
-            waited += busy.retry_after
-            await asyncio.sleep(busy.retry_after)
+            await sleep(delay)
         except ImageRejected as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

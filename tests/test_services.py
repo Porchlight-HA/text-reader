@@ -123,7 +123,7 @@ async def test_busy_retries_then_succeeds(hass, entry, tmp_path):
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     sleep = AsyncMock()
     read = AsyncMock(side_effect=[Busy(5), Busy(5), RESULT])
-    with patch("custom_components.local_ocr.services.asyncio.sleep", sleep), \
+    with patch("custom_components.local_ocr.services.sleep", sleep), \
             patch.object(LocalOcrClient, "read", read):
         assert await _call(hass, file_path=str(p)) == RESULT
     assert [c.args[0] for c in sleep.call_args_list] == [5, 5]
@@ -134,14 +134,105 @@ async def test_busy_until_timeout_raises_timeout(hass, entry, tmp_path):
     p = tmp_path / "a.png"
     p.write_bytes(_png())
     hass.config.allowlist_external_dirs = {str(tmp_path)}
+    clock = [0.0]
+
+    async def fake_sleep(d):
+        clock[0] += d
+
     read = AsyncMock(side_effect=Busy(5))
-    with patch("custom_components.local_ocr.services.asyncio.sleep", AsyncMock()), \
+    with patch("custom_components.local_ocr.services.sleep", fake_sleep), \
+            patch("custom_components.local_ocr.services.monotonic", lambda: clock[0]), \
             patch.object(LocalOcrClient, "read", read):
         with pytest.raises(HomeAssistantError) as err:
             await _call(hass, file_path=str(p))
     assert err.value.translation_key == "timeout"
     assert err.value.translation_placeholders == {"timeout": "30"}
     assert read.call_count == 7
+
+
+async def test_busy_budget_counts_request_time(hass, entry, tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    clock = [0.0]
+
+    async def slow_read(*a, **k):
+        clock[0] += 20
+        raise Busy(5)
+
+    with patch("custom_components.local_ocr.services.sleep", AsyncMock()), \
+            patch("custom_components.local_ocr.services.monotonic", lambda: clock[0]), \
+            patch.object(LocalOcrClient, "read", slow_read):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "timeout"
+
+
+async def test_busy_retry_after_clamped(hass, entry, tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    sleep = AsyncMock()
+    with patch("custom_components.local_ocr.services.sleep", sleep), \
+            patch.object(LocalOcrClient, "read", AsyncMock(side_effect=[Busy(0), RESULT])):
+        await _call(hass, file_path=str(p))
+    assert sleep.call_args.args[0] == 0.5
+
+
+async def test_media_source_remote_absolute(hass, entry, aioclient_mock):
+    aioclient_mock.get("http://media.test/p.png", content=_png())
+    resolved = MagicMock(path=None, url="http://media.test/p.png")
+    with patch("homeassistant.components.media_source.async_resolve_media",
+               AsyncMock(return_value=resolved)):
+        assert await _call(hass, media_content_id="media-source://x/p") == RESULT
+
+
+async def test_media_source_remote_relative(hass, entry, aioclient_mock):
+    aioclient_mock.get("http://ha.test:8123/api/p.png", content=_png())
+    resolved = MagicMock(path=None, url="/api/p.png")
+    with patch("homeassistant.components.media_source.async_resolve_media",
+               AsyncMock(return_value=resolved)), \
+            patch("custom_components.local_ocr.services.get_url",
+                  return_value="http://ha.test:8123"):
+        assert await _call(hass, media_content_id="media-source://x/p") == RESULT
+
+
+async def test_media_source_relative_no_url(hass, entry):
+    from homeassistant.helpers.network import NoURLAvailableError
+
+    resolved = MagicMock(path=None, url="/api/p.png")
+    with patch("homeassistant.components.media_source.async_resolve_media",
+               AsyncMock(return_value=resolved)), \
+            patch("custom_components.local_ocr.services.get_url",
+                  side_effect=NoURLAvailableError):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, media_content_id="media-source://x/p")
+    assert err.value.translation_key == "no_image"
+
+
+@pytest.mark.parametrize("region", [
+    {"x": -1, "y": 0, "w": 10, "h": 10},
+    {"x": 0, "y": -5, "w": 10, "h": 10},
+    {"x": 0, "y": 0, "w": 0, "h": 10},
+    {"x": 0, "y": 0, "w": 10, "h": 0},
+    {"x": 0.5, "y": 0, "w": 300, "h": 200},
+    {"x": 10, "y": 10, "w": 0.5, "h": 200},
+    {"x": 0, "y": 0, "w": 0.001, "h": 0.5},
+])
+async def test_invalid_region_rejected(hass, entry, aioclient_mock, tmp_path, region):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, file_path=str(p), region=region)
+    assert err.value.translation_key == "invalid_region"
+    assert aioclient_mock.call_count == 0
+
+
+async def test_unknown_preset_rejected(hass, entry):
+    import voluptuous as vol
+    with pytest.raises(vol.Invalid):
+        await _call(hass, file_path="/x.png", preset="bogus")
 
 
 async def test_region_fraction_converted_to_px(hass, entry, aioclient_mock, tmp_path):
