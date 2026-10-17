@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.network import get_url
 
 from .ai_backend import AiUnavailable
@@ -342,7 +343,8 @@ async def _read_with_retry(
             await sleep(delay)
         except NoLocalApp:
             raise ServiceValidationError(
-                translation_domain=DOMAIN, translation_key="no_local_app"
+                translation_domain=DOMAIN,
+                translation_key="no_local_app" if is_hassio(hass) else "no_local_app_container",
             ) from None
         except AiUnavailable:
             # Never include the AI's error text.

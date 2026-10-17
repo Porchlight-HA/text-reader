@@ -161,7 +161,8 @@
       "ai_entity_required": "Pick the AI assistant to use with this choice.",
       "local_not_set_up": "This Text Reader was set up without the Local OCR app. To read on this device, remove Text Reader and add it again.",
       "ai_entity_invalid": "That assistant can't read images. Pick another one.",
-      "local_not_set_up_app": "Install and start the Local OCR app; Text Reader will find it automatically."
+      "local_not_set_up_app": "This Text Reader has no Local OCR app yet. Install and start the Local OCR app; Text Reader will find it automatically, then choose this again.",
+      "local_unsupported_options": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Keep the AI assistant choice."
     }
   },
   "selector": {
@@ -243,7 +244,10 @@
       "message": "The AI assistant for Text Reader isn't available."
     },
     "no_local_app": {
-      "message": "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, or add the app in Text Reader's options."
+      "message": "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, or install and start the Local OCR app; Text Reader will find it automatically."
+    },
+    "no_local_app_container": {
+      "message": "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, or remove Text Reader and add it again with the Local OCR app."
     }
   },
   "services": {

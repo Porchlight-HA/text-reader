@@ -586,12 +586,25 @@ async def test_unexpected_ai_error_is_translated_ai_unavailable(hass, ai_entry, 
 
 async def test_local_backend_on_ai_only_entry_says_there_is_no_app(hass, ai_entry, tmp_path):
     path = await _file(hass, tmp_path)
-    with pytest.raises(ServiceValidationError) as err:
-        await _call(hass, file_path=path, backend="local")
+    with patch("custom_components.text_reader.services.is_hassio", return_value=True):
+        with pytest.raises(ServiceValidationError) as err:
+            await _call(hass, file_path=path, backend="local")
     assert err.value.translation_key == "no_local_app"
     assert str(err.value) == (
         "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, "
-        "or add the app in Text Reader's options"
+        "or install and start the Local OCR app; Text Reader will find it automatically"
+    )
+
+
+async def test_local_backend_on_ai_only_container_says_remove_and_add_again(hass, ai_entry, tmp_path):
+    path = await _file(hass, tmp_path)
+    with patch("custom_components.text_reader.services.is_hassio", return_value=False):
+        with pytest.raises(ServiceValidationError) as err:
+            await _call(hass, file_path=path, backend="local")
+    assert err.value.translation_key == "no_local_app_container"
+    assert str(err.value) == (
+        "This Text Reader setup has no Local OCR app. Use backend: ai_task or auto, "
+        "or remove Text Reader and add it again with the Local OCR app"
     )
 
 

@@ -615,7 +615,7 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
     Saving reloads the entry so changes take effect.
     """
 
-    def _validate(self, user_input: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    async def _validate(self, user_input: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
         """Return (options to save, error code or None)."""
         entry = self.config_entry
         current = settings(entry)
@@ -625,7 +625,11 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
         options["ai_entity"] = ai_entity
         if backend in LOCAL_BACKENDS and not entry.data.get("url"):
             # On Supervisor, the App's discovery adds it to this entry once it runs.
-            return options, "local_not_set_up_app" if is_hassio(self.hass) else "local_not_set_up"
+            if not is_hassio(self.hass):
+                return options, "local_not_set_up"
+            if not (await local_supported(self.hass))[0]:
+                return options, "local_unsupported_options"
+            return options, "local_not_set_up_app"
         if backend in AI_BACKENDS and ai_entity is None:
             return options, "ai_entity_required"
         # Whatever the backend: a per-call backend or a repair can send images to any stored
@@ -643,7 +647,7 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            options, error = self._validate(user_input)
+            options, error = await self._validate(user_input)
             if error is None:
                 return self.async_create_entry(data=options)
             errors["base"] = error

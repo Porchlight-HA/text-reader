@@ -990,17 +990,45 @@ async def test_options_stored_entity_needs_no_new_ack(hass):
     assert entry.options["backend"] == "auto" and entry.options["timeout"] == 45
 
 
-async def test_options_local_not_set_up_on_supervisor_says_install_the_app(hass):
+def _ai_only_entry(hass):
     ai_entities(hass, AI)
     entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
                             data={"backend": "ai_task", "ai_entity": AI},
                             options={**OPTIONS, "backend": "ai_task", "ai_entity": AI})
     entry.add_to_hass(hass)
-    with patch(f"{CF}.is_hassio", return_value=True):
+    return entry
+
+
+async def test_options_local_not_set_up_on_supervisor_says_install_the_app(hass):
+    entry = _ai_only_entry(hass)
+    with patch(f"{CF}.is_hassio", return_value=True), \
+            patch(f"{CF}.local_supported", AsyncMock(return_value=(True, ""))):
         result = await hass.config_entries.options.async_init(entry.entry_id)
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {**BASE, "backend": "auto", "ai_entity": AI})
     assert result["errors"] == {"base": "local_not_set_up_app"}
+
+
+@pytest.mark.parametrize("reason", ["arch", "memory"])
+async def test_options_unsupported_device_is_not_told_to_install_the_app(hass, reason):
+    entry = _ai_only_entry(hass)
+    with patch(f"{CF}.is_hassio", return_value=True), \
+            patch(f"{CF}.local_supported", AsyncMock(return_value=(False, reason))):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {**BASE, "backend": "local", "ai_entity": AI})
+    assert result["errors"] == {"base": "local_unsupported_options"}
+
+
+async def test_options_support_not_checked_off_supervisor(hass):
+    entry = _ai_only_entry(hass)
+    check = AsyncMock(return_value=(False, "arch"))
+    with patch(f"{CF}.is_hassio", return_value=False), patch(f"{CF}.local_supported", check):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {**BASE, "backend": "auto", "ai_entity": AI})
+    check.assert_not_awaited()
+    assert result["errors"] == {"base": "local_not_set_up"}
 
 
 def test_options_local_not_set_up_copy():
@@ -1009,7 +1037,11 @@ def test_options_local_not_set_up_copy():
 
     strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
     assert strings["options"]["error"]["local_not_set_up_app"] == (
-        "Install and start the Local OCR app; Text Reader will find it automatically.")
+        "This Text Reader has no Local OCR app yet. Install and start the Local OCR app; "
+        "Text Reader will find it automatically, then choose this again.")
+    assert strings["options"]["error"]["local_unsupported_options"] == (
+        "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). "
+        "Keep the AI assistant choice.")
 
 
 # --- final review I5: manual "continue" fails fast ------------------------------------------
