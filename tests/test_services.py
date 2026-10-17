@@ -4,6 +4,7 @@ from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.components import camera as _camera  # noqa: F401
 from homeassistant.components import image as _image  # noqa: F401
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -475,7 +476,7 @@ async def test_backend_field_overrides_option(hass, entry, tmp_path):
         result = await _call(hass, file_path=path)  # option backend=local
         assert result["routed"] == "local"
     assert ai.call_count == 1
-    with pytest.raises(Exception, match="backend"):  # probatio MultipleInvalid
+    with pytest.raises(vol.Invalid, match="backend"):
         await _call(hass, file_path=path, backend="cloud")
 
 
@@ -513,3 +514,24 @@ async def test_recent_records_routed_no_text(hass, entry, tmp_path):
     assert rec["routed"] == "local"
     assert "synthetic" not in repr(rec)
     assert "text" not in rec
+
+
+async def test_duration_sensor_tracks_local_reads_only(hass, entry, tmp_path):
+    path = await _file(hass, tmp_path)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "ai_entity": AI_ENTITY}
+    )
+    runtime = entry.runtime_data
+    runtime.last_duration_ms = 999
+    ai = AsyncMock(return_value=dict(AI_RESULT))
+    with patch("custom_components.text_reader.router.ai_read", ai):
+        await _call(hass, file_path=path, backend="ai_task")
+        assert runtime.last_duration_ms == 999
+        weak = {**RESULT, "text": "", "ms": 77}
+        with patch.object(LocalOcrClient, "read", AsyncMock(return_value=weak)):
+            result = await _call(hass, file_path=path, backend="auto")
+        assert result["routed"] == "local→ai_task"
+        assert runtime.last_duration_ms == 999
+    with patch.object(LocalOcrClient, "read", AsyncMock(return_value=dict(RESULT))):
+        await _call(hass, file_path=path, backend="local")
+    assert runtime.last_duration_ms == 12

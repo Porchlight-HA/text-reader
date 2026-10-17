@@ -327,8 +327,8 @@ async def _read_with_retry(
                 all_frames=all_frames,
                 timeout=timeout,
             )
-            if result.get("routed") != "ai_task":
-                # The duration sensor tracks the local App only.
+            if result.get("routed") == "local":
+                # The duration sensor tracks answers from the local App only.
                 ms = result.get("ms")
                 if not isinstance(ms, (int, float)):
                     ms = (monotonic() - start) * 1000
