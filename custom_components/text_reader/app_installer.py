@@ -23,7 +23,8 @@ APP_REPO_URL = "https://github.com/Porchlight-HA/local-ocr"
 DISCOVERY_SERVICE = "text_reader"
 
 SUPPORTED_ARCHES = ("aarch64", "amd64")
-MIN_MEM_KB = 1_900_000
+# A 2 GB Pi reports about 1.8–1.9 GB MemTotal after the GPU reservation (ruling R8).
+MIN_MEM_KB = 1_700_000
 MEMINFO_PATH = Path("/proc/meminfo")
 POLL_INTERVAL = 5.0
 _ARCH_ALIASES = {"x86_64": "amd64", "amd64": "amd64", "arm64": "aarch64", "aarch64": "aarch64"}
@@ -77,13 +78,31 @@ async def local_supported(hass: HomeAssistant) -> tuple[bool, str]:
 
 
 def _is_app(slug: str) -> bool:
-    # A store repository prefixes its slugs with a hash ("1a2b3c4d_local_ocr"); a local build doesn't.
-    return slug == APP_SLUG or slug.endswith(f"_{APP_SLUG}")
+    # A store repository prefixes its slugs with a hash of its URL ("1a2b3c4d_local_ocr").
+    return slug.endswith(f"_{APP_SLUG}")
+
+
+def _same_repo(url: str | None) -> bool:
+    def norm(value: str) -> str:
+        return value.strip().lower().rstrip("/").removesuffix(".git")
+
+    return bool(url) and norm(str(url)) == norm(APP_REPO_URL)
 
 
 async def _find_app(client: Any) -> Any | None:
-    """The app's store entry, preferring an installed one."""
-    apps = [a for a in await client.store.addons_list() if _is_app(a.slug)]
+    """The app's store entry from our repository (never a look-alike), preferring an installed one."""
+    ours = {
+        r.slug
+        for r in await client.store.repositories_list()
+        if _same_repo(r.source) or _same_repo(r.url)
+    }
+    if not ours:
+        return None
+    apps = [
+        a
+        for a in await client.store.addons_list()
+        if _is_app(a.slug) and a.repository in ours
+    ]
     installed = [a for a in apps if a.installed]
     return (installed or apps or [None])[0]
 
@@ -99,6 +118,18 @@ async def installed_app(hass: HomeAssistant) -> str | None:
         _LOGGER.debug("Couldn't list Supervisor apps: %s", type(err).__name__)
         return None
     return app.slug if app is not None and app.installed else None
+
+
+async def _running(hass: HomeAssistant, slug: str) -> bool | None:
+    """Is the app running? None when Supervisor can't say right now."""
+    from homeassistant.components.hassio import AddonError, AddonManager, AddonState
+
+    try:
+        info = await AddonManager(hass, _LOGGER, APP_NAME, slug).async_get_addon_info()
+    except AddonError as err:
+        _LOGGER.debug("Couldn't read the Local OCR app state: %s", type(err).__name__)
+        return None
+    return info.state is AddonState.RUNNING
 
 
 async def _start_if_stopped(hass: HomeAssistant, slug: str) -> None:
@@ -144,25 +175,32 @@ async def install_and_start(hass: HomeAssistant) -> str:
     return str(app.slug)
 
 
-async def start_installed(hass: HomeAssistant) -> None:
-    """Best effort: start the installed app if it is stopped. Never raises for Supervisor errors."""
+async def start_installed(hass: HomeAssistant) -> str | None:
+    """Best effort: start the installed app if it is stopped; return its slug (None if not installed).
+
+    Never raises for Supervisor errors: wait_for_discovery then reports a stopped app.
+    """
     from aiohasupervisor import SupervisorError
     from homeassistant.components.hassio import AddonError
 
     slug = await installed_app(hass)
     if slug is None:
-        return
+        return None
     try:
         await _start_if_stopped(hass, slug)
     except (SupervisorError, AddonError) as err:
         _LOGGER.debug("Couldn't start the Local OCR app: %s", type(err).__name__)
+    return slug
 
 
-async def wait_for_discovery(hass: HomeAssistant, timeout: float = 600) -> dict[str, Any]:
+async def wait_for_discovery(
+    hass: HomeAssistant, timeout: float = 600, *, slug: str | None = None
+) -> dict[str, Any]:
     """Poll Supervisor until the app announces itself; return its config plus the app slug.
 
-    The config is {host, port, token}; "slug" is added from the announcing app. Raises
-    InstallFailed("timeout").
+    The config is {host, port, token}; "slug" is added from the announcing app. With `slug`, each
+    poll also checks the app is running and fails fast with InstallFailed("not_started") if it
+    isn't (it crashed or never started). Raises InstallFailed("timeout") otherwise.
     """
     from aiohasupervisor import SupervisorError
     from homeassistant.components.hassio import get_supervisor_client
@@ -177,6 +215,9 @@ async def wait_for_discovery(hass: HomeAssistant, timeout: float = 600) -> dict[
                             return {**item.config, "slug": item.addon}
                 except SupervisorError as err:
                     _LOGGER.debug("Supervisor discovery list failed: %s", type(err).__name__)
+                if slug is not None and await _running(hass, slug) is False:
+                    _LOGGER.warning("The Local OCR app stopped before it announced itself")
+                    raise InstallFailed("not_started")
                 await asyncio.sleep(POLL_INTERVAL)
     except TimeoutError:
         raise InstallFailed("timeout") from None

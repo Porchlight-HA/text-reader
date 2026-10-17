@@ -481,22 +481,33 @@ def ai_entities(hass, *entity_ids):
         hass.states.async_set(entity_id, "unknown")
 
 
+OUR_REPO = SimpleNamespace(slug="abc123", source="https://github.com/Porchlight-HA/local-ocr",
+                           url="https://github.com/Porchlight-HA/local-ocr")
+
+
+def app(installed=False):
+    return SimpleNamespace(slug=APP_SLUG, installed=installed, repository="abc123")
+
+
 class FakeSupervisor:
     """get_supervisor_client(hass) and AddonManager, backed by an in-memory store."""
 
     def __init__(self, *, in_store=False, installed=False, running=False, repo_error=False,
-                 announce=True):
+                 announce=True, starts=True):
         from aiohasupervisor import SupervisorError
 
-        self.apps = [SimpleNamespace(slug=APP_SLUG, installed=installed)] if in_store or installed else []
+        self.apps = [app(installed=installed)] if in_store or installed else []
+        self.repos = [OUR_REPO] if in_store or installed else []
         self.running = running
         self.client = MagicMock()
         self.client.store.addons_list = AsyncMock(side_effect=lambda: list(self.apps))
+        self.client.store.repositories_list = AsyncMock(side_effect=lambda: list(self.repos))
 
         async def add_repository(options):
             if repo_error:
                 raise SupervisorError("repository is private")
-            self.apps = [SimpleNamespace(slug=APP_SLUG, installed=False)]
+            self.repos = [OUR_REPO]
+            self.apps = [app()]
 
         self.client.store.add_repository = AsyncMock(side_effect=add_repository)
         discovered = [SimpleNamespace(service="mqtt", addon="core_mosquitto", config={}),
@@ -505,7 +516,11 @@ class FakeSupervisor:
         self.client.discovery.list = AsyncMock(return_value=discovered if announce else [])
         self.manager = MagicMock()
         self.manager.async_install_addon = AsyncMock()
-        self.manager.async_start_addon = AsyncMock()
+
+        async def start():
+            self.running = starts
+
+        self.manager.async_start_addon = AsyncMock(side_effect=start)
 
         async def info():
             from homeassistant.components.hassio import AddonState
@@ -552,12 +567,23 @@ async def test_menu_shows_three_choices(hass):
 
 @pytest.mark.parametrize("reason", ["arch", "memory"])
 async def test_menu_ai_only_when_local_unsupported(hass, reason):
-    with patch(f"{CF}.local_supported", AsyncMock(return_value=(False, reason))):
+    with patch(f"{CF}.local_supported", AsyncMock(return_value=(False, reason))), \
+            patch(f"{CF}.is_hassio", return_value=True):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER})
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "user_ai_only"
     assert list(result["menu_options"]) == ["ai"]
+
+
+async def test_menu_not_gated_without_supervisor(hass):
+    """Container/Core users may run the app on another machine: always offer all three (R9)."""
+    with patch(f"{CF}.local_supported", AsyncMock(return_value=(False, "memory"))) as check:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER})
+    assert result["step_id"] == "user"
+    assert list(result["menu_options"]) == MENU
+    check.assert_not_awaited()
 
 
 async def test_local_installs_app_then_discovers(hass, aioclient_mock):
@@ -594,7 +620,7 @@ async def test_install_failed_falls_back_to_manual(hass, aioclient_mock):
         assert not result["errors"]
         sup.manager.async_install_addon.assert_not_awaited()
         # The user adds the repository and installs the app by hand, then selects Submit.
-        sup.apps = [SimpleNamespace(slug=APP_SLUG, installed=True)]
+        sup.repos, sup.apps = [OUR_REPO], [app(installed=True)]
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
     sup.manager.async_start_addon.assert_awaited_once()  # installed but not started: start it
@@ -621,6 +647,64 @@ async def test_install_discovery_timeout_goes_to_manual(hass):
         result = await pick(hass, "local")
         result = await finish_progress(hass, result, "install_app", "install_app")
     assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_not_found"}
+
+
+async def test_install_unexpected_error_ends_spinner(hass):
+    with FakeSupervisor(), patch(f"{CF}.app_installer.install_and_start",
+                                 AsyncMock(side_effect=RuntimeError("boom"))):
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "install_app", "install_app")
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "unknown"}
+
+
+@pytest.mark.parametrize("cfg", [
+    {"port": 8738, "token": TOKEN, "slug": APP_SLUG},
+    {"host": "", "port": 8738},
+    {"host": "abc123-local-ocr", "port": "nope"},
+])
+async def test_discovery_without_usable_address_ends_spinner(hass, cfg):
+    with FakeSupervisor(installed=True, running=True), \
+            patch(f"{CF}.app_installer.wait_for_discovery", AsyncMock(return_value=cfg)):
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_not_found"}
+
+
+async def test_app_that_does_not_start_fails_fast(hass):
+    with FakeSupervisor(announce=False, starts=False) as sup:
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "install_app", "install_app")
+    sup.manager.async_start_addon.assert_awaited_once()
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_failed_to_start"}
+
+
+async def test_installed_app_that_does_not_start_fails_fast(hass):
+    with FakeSupervisor(installed=True, announce=False, starts=False):
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
+    assert result["errors"] == {"base": "app_failed_to_start"}
+
+
+async def test_hassio_discovery_onto_ai_only_entry_marks_managed(hass):
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
+                            data={"backend": "ai_task", "ai_entity": AI})
+    entry.add_to_hass(hass)
+    with patch("custom_components.text_reader.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_HASSIO}, data=hassio_info())
+        await hass.async_block_till_done()
+    assert result["reason"] == "already_configured"
+    assert entry.data["managed"] is True
+    assert entry.data["url"] == "http://local-ocr:8738" and entry.data["slug"] == "local_ocr"
+    # ...so zeroconf can no longer repoint it.
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_ZEROCONF}, data=zc_info("0"))
+    assert result["reason"] == "already_configured"
+    assert entry.data["url"] == "http://local-ocr:8738"
 
 
 async def test_app_already_installed_skips_install(hass, aioclient_mock):
@@ -775,6 +859,17 @@ async def test_options_new_entity_needs_ack(hass):
     assert result["errors"] == {"base": "privacy_ack_required"}
 
 
+async def test_options_rejects_ineligible_entity(hass):
+    ai_entities(hass, AI)
+    hass.states.async_set("ai_task.text_only", "unknown")
+    entry = _local_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"backend": "auto", "ai_entity": "ai_task.text_only", "privacy_ack": True})
+    assert result["errors"] == {"base": "ai_entity_invalid"}
+    assert entry.options["backend"] == "local"
+
+
 async def test_options_ai_backend_needs_entity(hass):
     entry = _local_entry(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -826,6 +921,13 @@ def test_strings_cover_new_steps():
     assert {"install_app", "wait_for_discovery"} <= set(cfg["progress"])
     for code in ("privacy_ack_required", "ai_unavailable", "ai_failed", "app_not_found"):
         assert code in cfg["error"]
+    assert cfg["step"]["install_app_manual"]["description"].startswith(
+        "Text Reader couldn't finish setting up the Local OCR app automatically.")
+    assert "{repo_link}" in cfg["step"]["install_app_manual"]["description"]
+    assert cfg["error"]["app_failed_to_start"] == (
+        "The Local OCR app didn't start. Open it in Settings > Apps to see its log, then try again.")
+    assert strings["options"]["error"]["ai_entity_invalid"] == (
+        "That assistant can't read images. Pick another one.")
     for code in ("privacy_ack_required", "ai_entity_required", "local_not_set_up"):
         assert code in strings["options"]["error"]
 

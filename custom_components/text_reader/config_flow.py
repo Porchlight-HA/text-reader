@@ -56,6 +56,9 @@ BACKENDS = ["local", "ai_task", "auto"]
 LOCAL_BACKENDS = ("local", "auto")
 AI_BACKENDS = ("ai_task", "auto")
 NOT_USED = "not used"
+# InstallFailed reasons that get their own error on the manual page. A failure to add the
+# repository or install needs none: the page itself says what to do.
+_INSTALL_ERRORS = {"timeout": "app_not_found", "not_started": "app_failed_to_start"}
 
 MY_ADD_REPOSITORY = (
     "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/"
@@ -211,7 +214,9 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
         self._managed = True
         self._slug = discovery_info.slug
         await self.async_set_unique_id(DOMAIN)
-        updates = {"url": self._url, "token": self._token, "slug": self._slug}
+        # "managed" too: discovery onto an AI-only entry turns it into an App entry, whose token comes
+        # from discovery (reauth_managed) and which zeroconf must not repoint.
+        updates = {"url": self._url, "token": self._token, "slug": self._slug, "managed": True}
         self._abort_stale_reauth(updates)
         self._abort_if_unique_id_configured(updates=updates)
         return await self.async_step_hassio_confirm()
@@ -269,7 +274,10 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
-        supported, reason = await local_supported(self.hass)
+        # Only gate where Supervisor runs the app; Container/Core users may run it on another machine.
+        supported, reason = (
+            await local_supported(self.hass) if is_hassio(self.hass) else (True, "")
+        )
         if not supported:
             _LOGGER.debug("Local OCR app not offered here: %s", reason)
             return self.async_show_menu(step_id="user_ai_only", menu_options=["ai"])
@@ -350,17 +358,14 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_install(self) -> dict[str, Any]:
         self._slug = await app_installer.install_and_start(self.hass)
-        return await app_installer.wait_for_discovery(self.hass)
+        return await app_installer.wait_for_discovery(self.hass, slug=self._slug)
 
     async def _async_wait(self) -> dict[str, Any]:
-        await app_installer.start_installed(self.hass)
-        return await app_installer.wait_for_discovery(self.hass)
+        slug = await app_installer.start_installed(self.hass)
+        return await app_installer.wait_for_discovery(self.hass, slug=slug)
 
     async def _async_progress(
-        self,
-        step_id: str,
-        work: Coroutine[Any, Any, dict[str, Any]],
-        on_failure: str | None,
+        self, step_id: str, work: Coroutine[Any, Any, dict[str, Any]]
     ) -> ConfigFlowResult:
         """Run `work` behind a progress step; on success continue to the sample test."""
         if self._task is None:
@@ -372,12 +377,24 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
                 step_id=step_id, progress_action=step_id, progress_task=self._task
             )
         task, self._task = self._task, None
+        # Every failure must end the spinner: HA's background configure only suppresses UnknownFlow.
         try:
             cfg = task.result()
-        except InstallFailed:
-            self._manual_error = on_failure
+        except InstallFailed as err:
+            self._manual_error = _INSTALL_ERRORS.get(err.reason)
             return self.async_show_progress_done(next_step_id="install_app_manual")
-        self._url = _host_url(str(cfg["host"]), cfg.get("port"))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Setting up the Local OCR app failed: %s", type(err).__name__)
+            self._manual_error = "unknown"
+            return self.async_show_progress_done(next_step_id="install_app_manual")
+        host, port = cfg.get("host"), cfg.get("port")
+        if not isinstance(host, str) or not host or not (
+            port is None or (isinstance(port, int) and 0 < port < 65536)
+        ):
+            _LOGGER.warning("The Local OCR app announced itself without a usable address")
+            self._manual_error = "app_not_found"
+            return self.async_show_progress_done(next_step_id="install_app_manual")
+        self._url = _host_url(host, port)
         self._token = _clean_token(cfg.get("token"))
         self._managed = True
         self._slug = cfg.get("slug") or self._slug
@@ -386,14 +403,12 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_install_app(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return await self._async_progress("install_app", self._async_install(), None)
+        return await self._async_progress("install_app", self._async_install())
 
     async def async_step_wait_for_discovery(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return await self._async_progress(
-            "wait_for_discovery", self._async_wait(), "app_not_found"
-        )
+        return await self._async_progress("wait_for_discovery", self._async_wait())
 
     async def async_step_install_app_manual(
         self, user_input: dict[str, Any] | None = None
@@ -573,6 +588,10 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
             if ai_entity is None:
                 return options, "ai_entity_required"
             already_acked = current.backend in AI_BACKENDS and current.ai_entity == ai_entity
+            # A new choice must be able to read images. The entity already in use is not re-checked,
+            # so a briefly unavailable assistant doesn't block saving other options (repairs cover it).
+            if not already_acked and ai_entity not in eligible_entities(self.hass):
+                return options, "ai_entity_invalid"
             if not already_acked and not user_input.get("privacy_ack"):
                 return options, "privacy_ack_required"
         return options, None
