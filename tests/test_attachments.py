@@ -125,13 +125,15 @@ async def test_cancel_during_write_still_deletes_the_file(hass):
 
     from custom_components.text_reader import attachments
 
-    started, release = threading.Event(), threading.Event()
+    started, release, written = threading.Event(), threading.Event(), threading.Event()
     real_write = attachments._write
 
     def slow_write(directory, path, data):
         started.set()
         release.wait(5)
         real_write(directory, path, data)
+        assert path.exists()  # the file really is created after the cancel
+        written.set()
 
     async def stage():
         async with stage_image(hass, b"abc", "image/png"):
@@ -144,10 +146,9 @@ async def test_cancel_during_write_still_deletes_the_file(hass):
         with pytest.raises(asyncio.CancelledError):
             await task
         release.set()
+        assert await hass.async_add_executor_job(written.wait, 5)
+        for _ in range(5):  # let the write's done-callbacks run on the loop
+            await asyncio.sleep(0)
         await hass.async_block_till_done()
-        for _ in range(50):  # the thread finishes, then its done-callback deletes
-            if not any(_tmp(hass).iterdir()):
-                break
-            await asyncio.sleep(0.01)
     assert not list(_tmp(hass).iterdir())
     assert not hass.data[DOMAIN]["staged"]
