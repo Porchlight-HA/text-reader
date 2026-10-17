@@ -13,7 +13,11 @@ class LocalOcrError(Exception):
 
 
 class CannotConnect(LocalOcrError):
-    """Server unreachable or timed out."""
+    """Server unreachable (including a timeout while connecting)."""
+
+
+class Timeout(LocalOcrError):
+    """The server accepted the connection but didn't answer in time."""
 
 
 class Unauthorized(LocalOcrError):
@@ -37,7 +41,14 @@ class Busy(LocalOcrError):
 
 
 class ServerError(LocalOcrError):
-    """Server-side failure (model_error etc.); message is kept."""
+    """Server-side failure (model_error etc.); the server's message and error code are kept.
+
+    The message is the server's own text (never recognised text).
+    """
+
+    def __init__(self, message: str, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -45,6 +56,9 @@ class Health:
     status: str
     model_state: str
     detail: str | None = None
+    # From the server's "memory" object; None when the server is too old to report it.
+    oom_kills: int | None = None
+    last_oom: str | None = None
 
 
 @dataclass
@@ -81,15 +95,24 @@ class LocalOcrClient:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
 
     async def _request(
-        self, method: str, path: str, *, auth: bool = True, **kwargs: Any
+        self,
+        method: str,
+        path: str,
+        *,
+        auth: bool = True,
+        timeout: float | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         headers = self._headers() if auth else {}
+        client_timeout = (
+            self._timeout if timeout is None else aiohttp.ClientTimeout(total=timeout)
+        )
         try:
             async with self._session.request(
                 method,
                 f"{self._url}{path}",
                 headers=headers,
-                timeout=self._timeout,
+                timeout=client_timeout,
                 **kwargs,
             ) as resp:
                 status = resp.status
@@ -98,7 +121,11 @@ class LocalOcrClient:
                 except (aiohttp.ContentTypeError, ValueError):
                     body = None
                 retry = resp.headers.get("Retry-After")
-        except (aiohttp.ClientError, TimeoutError) as err:
+        except aiohttp.ConnectionTimeoutError as err:
+            raise CannotConnect(str(err) or type(err).__name__) from err
+        except TimeoutError as err:  # includes aiohttp's socket-read timeout
+            raise Timeout(type(err).__name__) from err
+        except aiohttp.ClientError as err:
             raise CannotConnect(str(err) or type(err).__name__) from err
         except ValueError:
             # aiohttp rejects invalid header values; never echo the token.
@@ -123,15 +150,22 @@ class LocalOcrClient:
             if delay != delay or delay == float("inf"):  # nan or +inf
                 delay = 5.0
             raise Busy(max(delay, 0.0))
-        raise ServerError(message or code or f"HTTP {status}")
+        raise ServerError(message or code or f"HTTP {status}", code)
 
     async def health(self) -> Health:
         data = await self._request("GET", "/v1/health", auth=False)
+        memory = data.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
+        kills = memory.get("oom_kills")
+        last = memory.get("last_oom")
         try:
             return Health(
                 status=data["status"],
                 model_state=data["model_state"],
                 detail=data.get("detail"),
+                oom_kills=kills if isinstance(kills, int) else None,
+                last_oom=last if isinstance(last, str) else None,
             )
         except KeyError as err:
             raise ServerError("invalid health response") from err
@@ -151,7 +185,9 @@ class LocalOcrClient:
         min_confidence: float = 0.5,
         region: tuple[int, int, int, int] | None = None,
         all_frames: bool = False,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
+        """POST /v1/read. `timeout` overrides the client's default for this call."""
         form = aiohttp.FormData()
         form.add_field(
             "image", image, filename="image", content_type="application/octet-stream"
@@ -161,4 +197,4 @@ class LocalOcrClient:
         if region is not None:
             form.add_field("region", ",".join(str(int(v)) for v in region))
         form.add_field("all_frames", "true" if all_frames else "false")
-        return await self._request("POST", "/v1/read", data=form)
+        return await self._request("POST", "/v1/read", data=form, timeout=timeout)

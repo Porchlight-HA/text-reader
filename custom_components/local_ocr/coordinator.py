@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .api import CannotConnect, Health, Info, LocalOcrError, Unauthorized
 from .const import DOMAIN, MIN_API
@@ -22,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=60)
 INFO_EVERY = 10
 FAILURES_FOR_ISSUE = 3
+OOM_RECENT = timedelta(hours=1)
 ISSUE_IDS = ("app_not_running", "app_outdated", "model_failed", "low_memory")
 
 
@@ -51,6 +53,8 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
         self._info: Info | None = None
         self._failures = 0
         self._auth_failed = False
+        self._oom_kills: int | None = None  # last count seen; the first poll sets the baseline
+        self._oom_kill_seen: datetime | None = None  # when a poll last saw the count rise
 
     async def _async_update_data(self) -> Status:
         client = self.config_entry.runtime_data.client
@@ -74,6 +78,30 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
         self._sync_issues(status)
         return status
 
+    def _memory_low(self, health: Health | None) -> bool:
+        """True when the server ran out of memory recently.
+
+        Causes: a model load failed for lack of memory ("out of memory: ..." detail); an inference ran out of
+        memory within the last hour (last_oom); or the kernel OOM-killed the server (cgroup oom_kills rose since
+        the entry loaded) within the last hour.
+        """
+        if health is None:
+            return False
+        now = dt_util.utcnow()
+        if health.oom_kills is not None:
+            if self._oom_kills is not None and health.oom_kills > self._oom_kills:
+                self._oom_kill_seen = now
+            self._oom_kills = health.oom_kills
+        if self._oom_kill_seen is not None and now - self._oom_kill_seen <= OOM_RECENT:
+            return True
+        if (health.detail or "").lower().startswith("out of memory"):
+            return True
+        if health.last_oom:
+            last = dt_util.parse_datetime(health.last_oom)
+            if last is not None and last.tzinfo is not None and now - last <= OOM_RECENT:
+                return True
+        return False
+
     def _sync_issues(self, status: Status) -> None:
         entry = self.config_entry
         health, info = status.health, status.info
@@ -84,14 +112,15 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
             active["app_not_running"] = (fixable, key, {})
         if info is not None and info.api < MIN_API:
             active["app_outdated"] = (False, "app_outdated", {})
-        if health is not None and health.model_state == "error":
+        if self._memory_low(health):
+            # A memory cause replaces model_failed: the fix is memory, not a restart.
+            active["low_memory"] = (False, "low_memory", {})
+        elif health is not None and health.model_state == "error":
             active["model_failed"] = (
                 False,
                 "model_failed",
                 {"detail": health.detail or "unknown"},
             )
-        if health is not None and "memory" in (health.detail or "").lower():
-            active["low_memory"] = (False, "low_memory", {})
         for issue_id in ISSUE_IDS:
             if issue_id in active:
                 fixable, key, placeholders = active[issue_id]

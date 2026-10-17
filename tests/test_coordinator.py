@@ -16,7 +16,8 @@ from custom_components.local_ocr.const import DOMAIN
 
 URL = "http://ocr.test:8738"
 INFO = {"version": "0.1.0", "api": 1, "arch": "amd64", "engine": "rapidocr"}
-HEALTH = {"status": "ok", "model_state": "loaded"}
+HEALTH = {"status": "ok", "model_state": "ready", "detail": None,
+          "memory": {"oom_kills": 0, "last_oom": None}}
 READ = {"text": "synthetic", "ms": 321, "blocks": [], "fields": {}}
 
 
@@ -80,20 +81,73 @@ async def test_app_outdated_issue(hass, aioclient_mock):
 async def test_model_failed_issue_has_detail(hass, aioclient_mock):
     await _setup(
         hass, aioclient_mock,
-        health={"status": "degraded", "model_state": "error", "detail": "bad onnx file"},
+        health={"status": "ok", "model_state": "error", "detail": "bad onnx file",
+                "memory": {"oom_kills": 0, "last_oom": None}},
     )
     issue = _issue(hass, "model_failed")
     assert issue.translation_placeholders == {"detail": "bad onnx file"}
     assert issue.is_fixable is False
-    assert hass.states.get("binary_sensor.local_ocr_status").state == "off"
+    # The server still answers (status "ok"), so the connectivity sensor stays on; the repair carries the error.
+    assert hass.states.get("binary_sensor.local_ocr_status").state == "on"
 
 
-async def test_low_memory_issue(hass, aioclient_mock):
-    await _setup(
-        hass, aioclient_mock,
-        health={"status": "ok", "model_state": "loaded", "detail": "low memory"},
-    )
+def _health(model_state="ready", detail=None, oom_kills=0, last_oom=None):
+    return {"status": "ok", "model_state": model_state, "detail": detail,
+            "memory": {"oom_kills": oom_kills, "last_oom": last_oom}}
+
+
+async def _set_health(hass, mock, health):
+    mock.clear_requests()
+    mock.get(f"{URL}/v1/info", json=INFO)
+    mock.get(f"{URL}/v1/health", json=health)
+    await _poll(hass)
+
+
+async def test_model_load_oom_shows_low_memory_instead_of_model_failed(hass, aioclient_mock):
+    # What the server reports when loading the model runs out of memory.
+    await _setup(hass, aioclient_mock, health=_health(
+        "error", "out of memory: Failed to allocate memory for requested buffer"))
     assert _issue(hass, "low_memory") is not None
+    assert _issue(hass, "model_failed") is None
+
+
+async def test_recent_inference_oom_raises_low_memory(hass, aioclient_mock):
+    recent = (dt_util.utcnow() - timedelta(minutes=5)).isoformat()
+    await _setup(hass, aioclient_mock, health=_health("ready", last_oom=recent))
+    assert _issue(hass, "low_memory") is not None
+    assert _issue(hass, "model_failed") is None
+
+
+async def test_old_inference_oom_is_ignored(hass, aioclient_mock):
+    old = (dt_util.utcnow() - timedelta(hours=2)).isoformat()
+    await _setup(hass, aioclient_mock, health=_health("unloaded", last_oom=old))
+    assert _issue(hass, "low_memory") is None
+
+
+async def test_oom_kill_since_load_raises_low_memory_then_clears(hass, aioclient_mock):
+    await _setup(hass, aioclient_mock, health=_health("ready", oom_kills=4))
+    assert _issue(hass, "low_memory") is None  # kills before the entry loaded don't count
+    # The kernel killed the server; s6 restarted it, so the model is unloaded and there's no detail.
+    await _set_health(hass, aioclient_mock, _health("unloaded", oom_kills=5))
+    assert _issue(hass, "low_memory") is not None
+    assert _issue(hass, "model_failed") is None
+    await _set_health(hass, aioclient_mock, _health("ready", oom_kills=5))
+    assert _issue(hass, "low_memory") is not None  # still within the hour
+    later = dt_util.utcnow() + timedelta(hours=1, minutes=2)
+    with patch("custom_components.local_ocr.coordinator.dt_util.utcnow", return_value=later):
+        await _set_health(hass, aioclient_mock, _health("ready", oom_kills=5))
+    assert _issue(hass, "low_memory") is None
+
+
+async def test_non_memory_load_error_is_model_failed_only(hass, aioclient_mock):
+    await _setup(hass, aioclient_mock, health=_health("error", "bad onnx file"))
+    assert _issue(hass, "model_failed") is not None
+    assert _issue(hass, "low_memory") is None
+
+
+async def test_old_server_without_memory_object(hass, aioclient_mock):
+    await _setup(hass, aioclient_mock, health={"status": "ok", "model_state": "ready", "detail": None})
+    assert _issue(hass, "low_memory") is None
 
 
 async def test_unmanaged_issue_not_fixable(hass, aioclient_mock):
@@ -200,6 +254,6 @@ async def test_read_401_starts_reauth(hass, aioclient_mock, tmp_path):
         await hass.services.async_call(
             DOMAIN, "read_image", {"file_path": str(p)}, blocking=True, return_response=True
         )
-    assert err.value.translation_key == "app_unavailable"
+    assert err.value.translation_key == "auth_failed"
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert any(f["context"]["source"] == "reauth" for f in flows)
