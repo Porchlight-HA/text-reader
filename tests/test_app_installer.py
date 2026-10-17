@@ -242,3 +242,26 @@ async def test_find_app_accepts_a_local_build(hass, sup):
     assert await install_and_start(hass) == "local_local_ocr"
     sup.client.store.add_repository.assert_not_awaited()
     sup.manager.async_install_addon.assert_not_awaited()
+
+
+def test_app_too_old():
+    from custom_components.text_reader.app_installer import MIN_APP_VERSION, app_too_old
+
+    assert MIN_APP_VERSION == "0.3.0"
+    assert app_too_old("0.2.9") is True
+    assert app_too_old("0.3.0b1") is True
+    assert app_too_old("0.3.0") is False
+    assert app_too_old("1.2.0") is False
+    assert app_too_old(None) is False
+    assert app_too_old("not a version!") is False
+
+
+async def test_installed_version(hass):
+    from custom_components.text_reader.app_installer import installed_version
+
+    manager = MagicMock()
+    manager.async_get_addon_info = AsyncMock(return_value=SimpleNamespace(version="0.3.1"))
+    with patch("homeassistant.components.hassio.AddonManager", MagicMock(return_value=manager)):
+        assert await installed_version(hass, "abc_local_ocr") == "0.3.1"
+        manager.async_get_addon_info.side_effect = AddonError("nope")
+        assert await installed_version(hass, "abc_local_ocr") is None

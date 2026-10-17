@@ -12,6 +12,7 @@ import platform
 from pathlib import Path
 from typing import Any
 
+from awesomeversion import AwesomeVersion
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.hassio import is_hassio
 
@@ -22,6 +23,8 @@ APP_SLUG = "local_ocr"
 LOCAL_BUILD_SLUG = f"local_{APP_SLUG}"
 APP_REPO_URL = "https://github.com/Porchlight-HA/local-ocr"
 DISCOVERY_SERVICE = "text_reader"
+# Older apps announce themselves as "local_ocr", which Text Reader never hears.
+MIN_APP_VERSION = "0.3.0"
 
 SUPPORTED_ARCHES = ("aarch64", "amd64")
 # A 2 GB Pi reports about 1.8–1.9 GB MemTotal after the GPU reservation (ruling R8).
@@ -122,6 +125,29 @@ async def installed_app(hass: HomeAssistant) -> str | None:
         _LOGGER.debug("Couldn't list Supervisor apps: %s", type(err).__name__)
         return None
     return app.slug if app is not None and app.installed else None
+
+
+def app_too_old(version: str | None) -> bool:
+    """True when the installed app is known to be older than MIN_APP_VERSION (unknown is not)."""
+    if not version:
+        return False
+    try:
+        return bool(AwesomeVersion(version) < AwesomeVersion(MIN_APP_VERSION))
+    except Exception:  # noqa: BLE001  # an unparseable version (a local build) is not blocked
+        return False
+
+
+async def installed_version(hass: HomeAssistant, slug: str) -> str | None:
+    """The installed app's version, or None when Supervisor can't say."""
+    from homeassistant.components.hassio import AddonError, AddonManager
+
+    try:
+        info = await AddonManager(hass, _LOGGER, APP_NAME, slug).async_get_addon_info()
+    except AddonError as err:
+        _LOGGER.debug("Couldn't read the Local OCR app version: %s", type(err).__name__)
+        return None
+    version = getattr(info, "version", None)
+    return version if isinstance(version, str) else None
 
 
 async def _running(hass: HomeAssistant, slug: str) -> bool | None:

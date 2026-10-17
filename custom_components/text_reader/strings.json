@@ -113,7 +113,9 @@
       "ai_unavailable": "The AI assistant isn't available or can't read images. Check it, then try again.",
       "ai_failed": "The AI assistant couldn't read the sample image. Check it, then try again.",
       "app_not_found": "Text Reader didn't hear from the Local OCR app. Make sure it is installed and started, then try again.",
-      "app_failed_to_start": "The Local OCR app didn't start. Open it in Settings > Apps to see its log, then try again."
+      "app_failed_to_start": "The Local OCR app didn't start. Open it in Settings > Apps to see its log, then try again.",
+      "app_not_installed_yet": "The Local OCR app isn't installed yet. Use the button above to add it, then press Submit.",
+      "app_too_old": "Update the Local OCR app to 0.3.0 or newer, then press Submit."
     },
     "abort": {
       "already_configured": "Text Reader is already configured.",

@@ -493,12 +493,13 @@ class FakeSupervisor:
     """get_supervisor_client(hass) and AddonManager, backed by an in-memory store."""
 
     def __init__(self, *, in_store=False, installed=False, running=False, repo_error=False,
-                 announce=True, starts=True):
+                 announce=True, starts=True, version="0.3.0"):
         from aiohasupervisor import SupervisorError
 
         self.apps = [app(installed=installed)] if in_store or installed else []
         self.repos = [OUR_REPO] if in_store or installed else []
         self.running = running
+        self.version = version
         self.client = MagicMock()
         self.client.store.addons_list = AsyncMock(side_effect=lambda: list(self.apps))
         self.client.store.repositories_list = AsyncMock(side_effect=lambda: list(self.repos))
@@ -524,7 +525,8 @@ class FakeSupervisor:
 
         async def info():
             from homeassistant.components.hassio import AddonState
-            return SimpleNamespace(state=AddonState.RUNNING if self.running else AddonState.NOT_RUNNING)
+            return SimpleNamespace(state=AddonState.RUNNING if self.running else AddonState.NOT_RUNNING,
+                                   version=self.version)
 
         self.manager.async_get_addon_info = AsyncMock(side_effect=info)
         self.manager_cls = MagicMock(return_value=self.manager)
@@ -630,11 +632,12 @@ async def test_install_failed_falls_back_to_manual(hass, aioclient_mock):
 
 
 async def test_manual_wait_times_out_shows_error(hass):
-    with FakeSupervisor(repo_error=True), \
+    with FakeSupervisor(repo_error=True) as sup, \
             patch(f"{CF}.app_installer.wait_for_discovery",
                   AsyncMock(side_effect=InstallFailed("timeout"))):
         result = await pick(hass, "local")
         result = await finish_progress(hass, result, "install_app", "install_app")
+        sup.repos, sup.apps = [OUR_REPO], [app(installed=True)]
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
     assert result["step_id"] == "install_app_manual"
@@ -1007,3 +1010,77 @@ def test_options_local_not_set_up_copy():
     strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
     assert strings["options"]["error"]["local_not_set_up_app"] == (
         "Install and start the Local OCR app; Text Reader will find it automatically.")
+
+
+# --- final review I5: manual "continue" fails fast ------------------------------------------
+
+
+async def _to_manual(hass, sup):
+    result = await pick(hass, "local")
+    result = await finish_progress(hass, result, "install_app", "install_app")
+    assert result["step_id"] == "install_app_manual"
+    return result
+
+
+async def test_manual_submit_without_the_app_installed_says_so_at_once(hass):
+    wait = AsyncMock()
+    with FakeSupervisor(repo_error=True) as sup, patch(f"{CF}.app_installer.wait_for_discovery", wait):
+        result = await _to_manual(hass, sup)
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_not_installed_yet"}
+    wait.assert_not_awaited()
+
+
+async def test_manual_submit_with_an_old_app_says_update_it(hass):
+    wait = AsyncMock()
+    with FakeSupervisor(repo_error=True) as sup, patch(f"{CF}.app_installer.wait_for_discovery", wait):
+        result = await _to_manual(hass, sup)
+        sup.repos, sup.apps, sup.version = [OUR_REPO], [app(installed=True)], "0.2.4"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_too_old"}
+    wait.assert_not_awaited()
+
+
+async def test_installed_old_app_goes_to_manual_without_waiting(hass):
+    wait = AsyncMock()
+    with FakeSupervisor(installed=True, running=True, version="0.2.0"), \
+            patch(f"{CF}.app_installer.wait_for_discovery", wait):
+        result = await pick(hass, "local")
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_too_old"}
+    wait.assert_not_awaited()
+
+
+async def test_app_with_unknown_version_is_not_blocked(hass, aioclient_mock):
+    mock_server(aioclient_mock, APP_URL)
+    with FakeSupervisor(installed=True, running=True, version=None):
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
+    assert result["step_id"] == "test"
+
+
+async def test_wait_with_no_app_installed_fails_fast(hass):
+    wait = AsyncMock()
+    with FakeSupervisor(installed=True, running=True), \
+            patch(f"{CF}.app_installer.start_installed", AsyncMock(return_value=None)), \
+            patch(f"{CF}.app_installer.wait_for_discovery", wait):
+        result = await pick(hass, "local")
+        result = await finish_progress(hass, result, "wait_for_discovery", "wait_for_discovery")
+    assert result["step_id"] == "install_app_manual"
+    assert result["errors"] == {"base": "app_not_installed_yet"}
+    wait.assert_not_awaited()
+
+
+def test_manual_install_error_copy():
+    import json
+    from pathlib import Path
+
+    strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
+    err = strings["config"]["error"]
+    assert err["app_not_installed_yet"] == (
+        "The Local OCR app isn't installed yet. Use the button above to add it, then press Submit.")
+    assert err["app_too_old"] == "Update the Local OCR app to 0.3.0 or newer, then press Submit."

@@ -58,7 +58,11 @@ AI_BACKENDS = ("ai_task", "auto")
 NOT_USED = "not used"
 # InstallFailed reasons that get their own error on the manual page. A failure to add the
 # repository or install needs none: the page itself says what to do.
-_INSTALL_ERRORS = {"timeout": "app_not_found", "not_started": "app_failed_to_start"}
+_INSTALL_ERRORS = {
+    "timeout": "app_not_found",
+    "not_started": "app_failed_to_start",
+    "not_installed": "app_not_installed_yet",
+}
 
 MY_ADD_REPOSITORY = (
     "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/"
@@ -353,8 +357,14 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
         slug = await app_installer.installed_app(self.hass)
         if slug is not None:
             self._slug = slug
+            if await self._app_too_old(slug):
+                self._manual_error = "app_too_old"
+                return await self.async_step_install_app_manual()
             return await self.async_step_wait_for_discovery()
         return await self.async_step_install_app()
+
+    async def _app_too_old(self, slug: str) -> bool:
+        return app_installer.app_too_old(await app_installer.installed_version(self.hass, slug))
 
     async def _async_install(self) -> dict[str, Any]:
         self._slug = await app_installer.install_and_start(self.hass)
@@ -362,6 +372,9 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_wait(self) -> dict[str, Any]:
         slug = await app_installer.start_installed(self.hass)
+        if slug is None:
+            # Nothing would ever announce itself: don't spin for ten minutes.
+            raise InstallFailed("not_installed")
         return await app_installer.wait_for_discovery(self.hass, slug=slug)
 
     async def _async_progress(
@@ -415,7 +428,16 @@ class TextReaderConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         if user_input is not None:
             self._manual_error = None
-            return await self.async_step_wait_for_discovery()
+            # Check before the spinner: with no app, or one too old to announce itself as
+            # text_reader, the wait could only time out after ten minutes.
+            slug = await app_installer.installed_app(self.hass)
+            if slug is None:
+                self._manual_error = "app_not_installed_yet"
+            elif await self._app_too_old(slug):
+                self._manual_error = "app_too_old"
+            else:
+                self._slug = slug
+                return await self.async_step_wait_for_discovery()
         return self.async_show_form(
             step_id="install_app_manual",
             description_placeholders={"repo_link": MY_ADD_REPOSITORY},
