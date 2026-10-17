@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import io
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from PIL import Image
 
-from .ai_backend import MAX_FRAMES, AiUnavailable, ai_read
+from .ai_backend import AiUnavailable, Region, ai_read
 from .api import CannotConnect, ImageRejected, Timeout
 from .data import TextReaderConfigEntry, settings
 
@@ -16,7 +14,10 @@ ROUTED_LOCAL = "local"
 ROUTED_AI = "ai_task"
 ROUTED_BOTH = "local→ai_task"
 
-type Region = tuple[int, int, int, int]
+
+
+class NoLocalApp(Exception):
+    """`backend: local` was asked of an entry that has no Local OCR app."""
 
 
 def _mean_confidence(blocks: Any) -> float | None:
@@ -72,44 +73,6 @@ def _label_ai(result: dict[str, Any], routed: str) -> dict[str, Any]:
     return result
 
 
-def _crop(img: Image.Image, region: Region | None) -> bytes:
-    frame = img.convert("RGB")
-    if region is not None:
-        x, y, w, h = region
-        frame = frame.crop((x, y, x + w, y + h))
-    buf = io.BytesIO()
-    frame.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _prepare(image: bytes, index: int, region: Region | None) -> bytes:
-    """One frame of an image, optionally cropped, as PNG bytes."""
-    try:
-        with Image.open(io.BytesIO(image)) as img:
-            img.seek(index)
-            return _crop(img, region)
-    except Exception:
-        raise ImageRejected("unsupported_image", "could not decode image") from None
-
-
-def _prepare_all(image: bytes, region: Region | None) -> list[bytes]:
-    """Every frame, each cropped to its own PNG."""
-    try:
-        with Image.open(io.BytesIO(image)) as img:
-            count = getattr(img, "n_frames", 1)
-            if count > MAX_FRAMES:
-                raise ImageRejected("too_large", "too many frames")
-            out: list[bytes] = []
-            for i in range(count):
-                img.seek(i)
-                out.append(_crop(img, region))
-            return out
-    except ImageRejected:
-        raise
-    except Exception:
-        raise ImageRejected("unsupported_image", "could not decode image") from None
-
-
 async def _ai(
     hass: HomeAssistant,
     entity_id: str,
@@ -117,28 +80,21 @@ async def _ai(
     *,
     preset: str,
     region: Region | None,
+    timeout: float,
     index: int | None = None,
     all_frames: bool = False,
 ) -> dict[str, Any]:
-    """AI read; a region is cropped per frame (never as a multi-frame image)."""
-    if all_frames and region is not None:
-        pngs = await hass.async_add_executor_job(_prepare_all, image, region)
-        frames = [await ai_read(hass, entity_id, png, preset=preset) for png in pngs]
-        return {
-            "frames": frames,
-            "text": "\n\n".join(f["text"] for f in frames),
-            "blocks": [],
-            "width": frames[0]["width"],
-            "height": frames[0]["height"],
-            "ms": sum(f["ms"] for f in frames),
-            "engine": f"ai_task:{entity_id}",
-            "model": None,
-            "preset": preset,
-            "confidence": None,
-        }
-    if not all_frames and (region is not None or index is not None):
-        image = await hass.async_add_executor_job(_prepare, image, index or 0, region)
-    return await ai_read(hass, entity_id, image, preset=preset, all_frames=all_frames)
+    """AI read. ai_read owns every image step (frame, EXIF rotation, crop, re-encode, limits)."""
+    return await ai_read(
+        hass,
+        entity_id,
+        image,
+        preset=preset,
+        all_frames=all_frames,
+        region=region,
+        index=index,
+        timeout=timeout,
+    )
 
 
 async def route_read(
@@ -158,12 +114,13 @@ async def route_read(
     client = entry.runtime_data.client
 
     if backend == "local" and client is None:
-        raise CannotConnect("no local App is configured")
+        raise NoLocalApp
     if backend == "ai_task" or client is None:
         if not cfg.ai_entity:
             raise AiUnavailable("no_entity")
         result = await _ai(
-            hass, cfg.ai_entity, image, preset=preset, region=region, all_frames=all_frames
+            hass, cfg.ai_entity, image, preset=preset, region=region, timeout=timeout,
+            all_frames=all_frames,
         )
         return _label_ai(result, ROUTED_AI)
 
@@ -191,7 +148,8 @@ async def route_read(
         ai_result: dict[str, Any] | None
         try:
             ai_result = await _ai(
-                hass, cfg.ai_entity, image, preset=preset, region=region, all_frames=all_frames
+                hass, cfg.ai_entity, image, preset=preset, region=region, timeout=timeout,
+                all_frames=all_frames,
             )
         except AiUnavailable:
             ai_result = None
@@ -203,11 +161,15 @@ async def route_read(
     if backend != "auto" or not cfg.ai_entity:
         return local
     if isinstance(local.get("frames"), list):
-        return await _route_frames(hass, cfg.ai_entity, cfg.auto_threshold, image, local, preset, region)
+        return await _route_frames(
+            hass, cfg.ai_entity, cfg.auto_threshold, image, local, preset, region, timeout
+        )
     if not needs_fallback(preset, local, cfg.auto_threshold):
         return local
     try:
-        result = await _ai(hass, cfg.ai_entity, image, preset=preset, region=region)
+        result = await _ai(
+            hass, cfg.ai_entity, image, preset=preset, region=region, timeout=timeout
+        )
     except (AiUnavailable, ImageRejected):
         return local
     return _label_ai(result, ROUTED_BOTH)
@@ -221,6 +183,7 @@ async def _route_frames(
     local: dict[str, Any],
     preset: str,
     region: Region | None,
+    timeout: float,
 ) -> dict[str, Any]:
     """Re-read only the weak frames with the AI entity."""
     frames: list[dict[str, Any]] = local["frames"]
@@ -230,7 +193,8 @@ async def _route_frames(
             continue
         try:
             replacement = await _ai(
-                hass, entity_id, image, preset=preset, region=region, index=index
+                hass, entity_id, image, preset=preset, region=region, timeout=timeout,
+                index=index,
             )
         except (AiUnavailable, ImageRejected):
             continue

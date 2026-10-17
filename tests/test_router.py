@@ -185,12 +185,14 @@ async def test_ai_only_entry_without_client(hass):
     assert result["routed"] == "ai_task"
 
 
-async def test_ai_region_is_cropped_before_staging(hass):
+async def test_ai_region_and_timeout_go_to_the_one_normaliser(hass):
     entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
+    image = _img((40, 30))
     with patch.object(router, "ai_read", new=AsyncMock(return_value=_ai())) as ai:
-        await _route(hass, entry, image=_img((40, 30)), backend="ai_task", region=(5, 5, 10, 8))
-    sent = Image.open(io.BytesIO(ai.await_args.args[2]))
-    assert sent.size == (10, 8)
+        await _route(hass, entry, image=image, backend="ai_task", region=(5, 5, 10, 8))
+    assert ai.await_args.args[2] is image  # the router never re-encodes: ai_read does
+    assert ai.await_args.kwargs["region"] == (5, 5, 10, 8)
+    assert ai.await_args.kwargs["timeout"] == 5.0
 
 
 async def test_auto_strong_local_stays_local(hass):
@@ -279,9 +281,7 @@ async def test_auto_all_frames_routes_weak_frames_only(hass):
     assert client.read.await_args.kwargs["all_frames"] is True
     ai_mock.assert_awaited_once()
     assert ai_mock.await_args.kwargs.get("all_frames", False) is False
-    sent = Image.open(io.BytesIO(ai_mock.await_args.args[2]))
-    assert sent.format == "PNG"
-    assert 30 <= sent.convert("RGB").getpixel((0, 0))[0] <= 50  # frame 1's colour, not 0 or 80
+    assert ai_mock.await_args.kwargs["index"] == 1
     assert result["confidence"] is None
     assert [f["text"] for f in result["frames"]] == ["one", "two fixed", "three"]
     assert [f["routed"] for f in result["frames"]] == ["local", "local→ai_task", "local"]
@@ -363,24 +363,6 @@ def _same_in_region_gif() -> bytes:
     return buf.getvalue()
 
 
-async def test_ai_all_frames_region_identical_crops_one_call_per_frame(hass):
-    entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
-    ai_mock = AsyncMock(side_effect=lambda *a, **k: _ai(f"t{ai_mock.await_count}"))
-    with patch.object(router, "ai_read", new=ai_mock):
-        result = await _route(
-            hass, entry, image=_same_in_region_gif(), backend="ai_task",
-            all_frames=True, region=(0, 0, 5, 5),
-        )
-    assert ai_mock.await_count == 3
-    for call in ai_mock.await_args_list:
-        sent = Image.open(io.BytesIO(call.args[2]))
-        assert sent.format == "PNG" and sent.size == (5, 5)
-        assert getattr(sent, "n_frames", 1) == 1
-    assert len(result["frames"]) == 3
-    assert result["routed"] == "ai_task"
-    assert result["confidence"] is None
-
-
 async def test_auto_weak_single_ai_image_rejected_keeps_local(hass):
     client = _client(_local(conf=0.2))
     entry = _entry(client, options={"ai_entity": AI_ENTITY})
@@ -407,7 +389,7 @@ async def test_explicit_local_without_client_raises(hass):
     entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
     with (
         patch.object(router, "ai_read", new=AsyncMock()) as ai,
-        pytest.raises(CannotConnect),
+        pytest.raises(router.NoLocalApp),
     ):
         await _route(hass, entry, backend="local")
     ai.assert_not_called()
@@ -434,5 +416,62 @@ async def test_seam_region_all_frames_through_real_ai_backend(hass):
     assert gen.await_count == 3
     assert [f["text"] for f in result["frames"]] == ["ok", "ok", "ok"]
     assert result["text"] == "ok\n\nok\n\nok"
-    assert result["width"] == 5 and result["height"] == 5
+    # Like the App: {frames, text} plus the router's labels; each frame has its uncropped size.
+    assert set(result) == {"frames", "text", "routed", "confidence"}
+    assert all((f["width"], f["height"]) == (20, 10) for f in result["frames"])
+    for call in gen.await_args_list:
+        assert call.kwargs["attachments"][0]["media_content_type"] == "image/png"
     assert result["routed"] == "ai_task"
+
+
+def _real_ai_entity(hass):
+    from types import SimpleNamespace as NS
+    from unittest.mock import MagicMock
+
+    from homeassistant.components.ai_task import AITaskEntityFeature
+    from homeassistant.components.ai_task.const import DATA_COMPONENT
+
+    feats = AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
+    component = MagicMock()
+    component.get_entity = lambda eid: NS(supported_features=feats) if eid == AI_ENTITY else None
+    hass.data[DATA_COMPONENT] = component
+
+
+async def test_seam_auto_unexpected_ai_error_keeps_local_result(hass):
+    _real_ai_entity(hass)
+    client = _client(_local(conf=0.2))
+    entry = _entry(client, options={"ai_entity": AI_ENTITY})
+    gen = AsyncMock(side_effect=RuntimeError("stream broke"))
+    with patch("homeassistant.components.ai_task.async_generate_data", new=gen):
+        result = await _route(hass, entry)
+    gen.assert_awaited_once()
+    assert result["routed"] == "local" and result["text"] == "hello"
+
+
+async def test_seam_auto_ai_timeout_keeps_local_result(hass, monkeypatch):
+    import asyncio
+
+    from custom_components.text_reader import ai_backend
+
+    _real_ai_entity(hass)
+    monkeypatch.setattr(ai_backend, "AI_MIN_TIMEOUT", 0.01)
+
+    async def slow(hass_, **kwargs):
+        await asyncio.sleep(5)
+
+    client = _client(_local(conf=0.2))
+    entry = _entry(client, options={"ai_entity": AI_ENTITY})
+    with patch("homeassistant.components.ai_task.async_generate_data", new=slow):
+        result = await _route(hass, entry, timeout=0.01)
+    assert result["routed"] == "local" and result["text"] == "hello"
+
+
+async def test_seam_auto_local_down_and_ai_crashes_raises_local_error(hass):
+    _real_ai_entity(hass)
+    client = _client(error=CannotConnect("down"))
+    entry = _entry(client, options={"ai_entity": AI_ENTITY})
+    gen = AsyncMock(side_effect=RuntimeError("x"))
+    with patch("homeassistant.components.ai_task.async_generate_data", new=gen), pytest.raises(
+        CannotConnect
+    ):
+        await _route(hass, entry)

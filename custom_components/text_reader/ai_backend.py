@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import probatio
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .api import ImageRejected
 from .attachments import stage_image
@@ -21,6 +22,17 @@ _LOGGER = logging.getLogger(__name__)
 
 AI_PROMPT_VERSION = 1
 MAX_FRAMES = 50
+# The local App's limit: decoding more than this needs too much memory on a Pi.
+MAX_PIXELS = 40_000_000
+# Above this, a photo is re-encoded as JPEG (quality 90) rather than a much larger PNG.
+PHOTO_PIXELS = 2_000_000
+# Formats every assistant accepts as-is (when single-frame, unrotated and uncropped).
+_PASSTHROUGH = {"JPEG", "PNG", "WEBP"}
+_PHOTO_FORMATS = {"JPEG", "MPO"}
+# Each AI call (one per frame) gets at least this long, whatever the read timeout option says.
+AI_MIN_TIMEOUT = 120
+
+type Region = tuple[int, int, int, int]
 
 _INSTRUCTION_TEMPLATE = (
     "You are a transcription tool. Read the text in the attached image exactly as "
@@ -115,11 +127,6 @@ def _str_list(value: Any) -> list[str] | None:
     return [v for v in value if isinstance(v, str)]
 
 
-def _lines(value: Any) -> dict[str, Any] | None:
-    lines = _str_list(value)
-    return None if lines is None else {"lines": lines, "confidence": None}
-
-
 def _tracking(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
@@ -140,32 +147,40 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
-def normalise(preset: str, data: Any) -> tuple[str, dict[str, Any]]:
-    """Map the model's data to (text, contract fields); never raises."""
+def _lines_or_none(value: Any) -> dict[str, Any] | None:
+    """Address lines as the App returns them; an empty list is "not found" (null), like local."""
+    lines = _str_list(value)
+    return {"lines": lines, "confidence": None} if lines else None
+
+
+def normalise(preset: str, data: Any) -> tuple[str, dict[str, Any] | None]:
+    """Map the model's data to (text, contract fields) shaped like the local App's; never raises."""
     if not isinstance(data, dict):
         data = {}
     text = data.get("text")
     text = text if isinstance(text, str) else ""
-    fields: dict[str, Any] = {}
+    fields: dict[str, Any] | None = None
     if preset == "envelope":
         markers = _str_list(data.get("markers"))
         generic = data.get("generic_addressee")
         fields = {
-            "addressee": _lines(data.get("addressee")),
-            "return_address": _lines(data.get("return_address")),
+            "addressee": _lines_or_none(data.get("addressee")),
+            "return_address": _lines_or_none(data.get("return_address")),
+            "indicia": [],  # the assistant isn't asked for indicia: always an empty list
             "markers": markers if markers is not None else [],
             "generic_addressee": generic if isinstance(generic, bool) else False,
         }
     elif preset == "label":
         fields = {
             "tracking": _tracking(data.get("tracking")),
-            "ship_to": _lines(data.get("ship_to")),
+            "ship_to": _lines_or_none(data.get("ship_to")),
         }
     elif preset == "meter":
         digits = data.get("digits")
         fields = {
             "value": _number(data.get("value")),
             "digits": digits if isinstance(digits, str) else "",
+            "confidence": None,
         }
     return text, fields
 
@@ -200,68 +215,136 @@ def eligible_entities(hass: HomeAssistant) -> list[str]:
         return []
 
 
-def _header(image: bytes) -> tuple[int, int, str, int]:
-    """(width, height, mime, n_frames) from the Pillow header."""
-    try:
-        with Image.open(io.BytesIO(image)) as img:
-            fmt = img.format or "PNG"
-            return (
-                img.width,
-                img.height,
-                Image.MIME.get(fmt, "image/png"),
-                getattr(img, "n_frames", 1),
-            )
-    except Exception as err:
-        raise ImageRejected("unsupported_image", "could not decode image") from err
+@dataclass(frozen=True)
+class _Frame:
+    """One frame, ready to send: bytes, mime, and its size after EXIF rotation (uncropped)."""
+
+    data: bytes
+    mime: str
+    width: int
+    height: int
 
 
-def _frames_png(image: bytes) -> list[bytes]:
-    out: list[bytes] = []
+def _orientation(img: Image.Image) -> int:
+    try:
+        return int(img.getexif().get(0x0112, 1))
+    except (TypeError, ValueError, OSError, SyntaxError):
+        return 1
+
+
+def _to_rgb(img: Image.Image) -> Image.Image:
+    """RGB, with any transparency flattened onto white (as the App does)."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        return bg
+    return img if img.mode == "RGB" else img.convert("RGB")
+
+
+def _encode_frame(
+    img: Image.Image, source: bytes, region: Region | None, single: bool
+) -> _Frame:
+    orientation = _orientation(img)
+    rotate = 2 <= orientation <= 8
+    w, h = img.size
+    width, height = (h, w) if orientation in (5, 6, 7, 8) else (w, h)
+    fmt = img.format or ""
+    if single and not rotate and region is None and fmt in _PASSTHROUGH:
+        return _Frame(source, Image.MIME[fmt], width, height)
+    frame = ImageOps.exif_transpose(img) if rotate else img
+    if region is not None:
+        x, y, rw, rh = region
+        if x >= width or y >= height:
+            raise ImageRejected("bad_request", "region starts outside the image")
+        frame = frame.crop((x, y, min(width, x + rw), min(height, y + rh)))
+    frame = _to_rgb(frame)
+    buf = io.BytesIO()
+    if fmt in _PHOTO_FORMATS and frame.width * frame.height > PHOTO_PIXELS:
+        frame.save(buf, format="JPEG", quality=90)
+        return _Frame(buf.getvalue(), "image/jpeg", width, height)
+    frame.save(buf, format="PNG")
+    return _Frame(buf.getvalue(), "image/png", width, height)
+
+
+def prepare_frames(
+    image: bytes, *, region: Region | None, index: int | None, all_frames: bool
+) -> list[_Frame]:
+    """The ONE image normaliser for every AI path (runs in the executor).
+
+    Opens the image, picks the frame(s) (frame `index`, default 0, unless all_frames), applies the
+    EXIF rotation, crops the region in rotated coordinates, and re-encodes unless the source is
+    already a single-frame JPEG/PNG/WEBP with no rotation and no crop. Raises ImageRejected.
+    """
     try:
         with Image.open(io.BytesIO(image)) as img:
-            for index in range(getattr(img, "n_frames", 1)):
-                img.seek(index)
-                buf = io.BytesIO()
-                img.convert("RGB").save(buf, format="PNG")
-                out.append(buf.getvalue())
-    except Exception as err:
-        raise ImageRejected("unsupported_image", "could not decode frame") from err
+            return _frames_of(img, image, region=region, index=index, all_frames=all_frames)
+    except ImageRejected:
+        raise
+    except Image.DecompressionBombError:
+        raise ImageRejected("too_large", "too many pixels") from None
+    except Exception:  # noqa: BLE001  # Pillow raises many types for a bad file
+        raise ImageRejected("unsupported_image", "could not decode image") from None
+
+
+def _frames_of(
+    img: Image.Image, source: bytes, *, region: Region | None, index: int | None, all_frames: bool
+) -> list[_Frame]:
+    if img.width * img.height > MAX_PIXELS:
+        raise ImageRejected("too_large", "too many pixels")
+    count = getattr(img, "n_frames", 1)
+    if all_frames:
+        if count > MAX_FRAMES:
+            raise ImageRejected("too_large", "too many frames")
+        indices = list(range(count))
+    else:
+        indices = [index or 0]
+        if indices[0] >= count:
+            raise ImageRejected("bad_request", "frame out of range")
+    out: list[_Frame] = []
+    for i in indices:
+        img.seek(i)
+        out.append(_encode_frame(img, source, region, count == 1))
     return out
 
 
+def ai_budget(timeout: float) -> float:
+    """Seconds allowed for one AI call: the read timeout, but never under AI_MIN_TIMEOUT."""
+    return max(float(timeout), float(AI_MIN_TIMEOUT))
+
+
 async def _call(
-    hass: HomeAssistant, entity_id: str, data: bytes, mime: str, preset: str
+    hass: HomeAssistant, entity_id: str, data: bytes, mime: str, preset: str, budget: float
 ) -> Any:
     from homeassistant.components.ai_task import async_generate_data
 
-    async with stage_image(hass, data, mime) as media_content_id:
-        try:
-            result = await async_generate_data(
-                hass,
-                task_name=f"Text Reader {preset}",
-                entity_id=entity_id,
-                instructions=INSTRUCTIONS[preset],
-                structure=structure_for(preset),
-                attachments=[
-                    {"media_content_id": media_content_id, "media_content_type": mime}
-                ],
-            )
-        except HomeAssistantError as err:
-            raise AiUnavailable(type(err).__name__) from err
-    return result.data
+    # Any failure is AiUnavailable with only the error class: never the message, which can hold
+    # recognised text. CancelledError is not an Exception, so cancellation still propagates.
+    try:
+        async with asyncio.timeout(budget):
+            async with stage_image(hass, data, mime) as media_content_id:
+                result = await async_generate_data(
+                    hass,
+                    task_name=f"Text Reader {preset}",
+                    entity_id=entity_id,
+                    instructions=INSTRUCTIONS[preset],
+                    structure=structure_for(preset),
+                    attachments=[
+                        {"media_content_id": media_content_id, "media_content_type": mime}
+                    ],
+                )
+                return result.data
+    except TimeoutError:
+        raise AiUnavailable("timeout") from None
+    except Exception as err:  # noqa: BLE001
+        raise AiUnavailable(type(err).__name__) from None
 
 
 async def _one(
-    hass: HomeAssistant,
-    entity_id: str,
-    data: bytes,
-    mime: str,
-    preset: str,
-    width: int,
-    height: int,
+    hass: HomeAssistant, entity_id: str, frame: _Frame, preset: str, budget: float
 ) -> dict[str, Any]:
     start = time.monotonic()
-    raw = await _call(hass, entity_id, data, mime, preset)
+    raw = await _call(hass, entity_id, frame.data, frame.mime, preset, budget)
     text, fields = normalise(preset, raw)
     ms = int((time.monotonic() - start) * 1000)
     _LOGGER.debug("ai_task read entity=%s preset=%s ms=%d", entity_id, preset, ms)
@@ -269,8 +352,8 @@ async def _one(
         "text": text,
         "blocks": [],
         "fields": fields,
-        "width": width,
-        "height": height,
+        "width": frame.width,
+        "height": frame.height,
         "ms": ms,
         "engine": f"ai_task:{entity_id}",
         "model": None,
@@ -286,8 +369,15 @@ async def ai_read(
     *,
     preset: str,
     all_frames: bool = False,
+    region: Region | None = None,
+    index: int | None = None,
+    timeout: float = AI_MIN_TIMEOUT,
 ) -> dict[str, Any]:
-    """Read an image with the AI Task entity; returns a contract-shaped dict."""
+    """Read an image with the AI Task entity; returns a contract-shaped dict.
+
+    Width and height are the frame's size after EXIF rotation and before any crop, as the App
+    reports. With all_frames the result is {frames, text}, like the App's.
+    """
     start = time.monotonic()
     try:
         problem = _entity_problem(hass, entity_id)
@@ -296,28 +386,13 @@ async def ai_read(
     if problem is not None:
         raise AiUnavailable(problem)
 
-    width, height, mime, n_frames = await hass.async_add_executor_job(_header, image)
+    frames = await hass.async_add_executor_job(
+        lambda: prepare_frames(image, region=region, index=index, all_frames=all_frames)
+    )
+    budget = ai_budget(timeout)
     if not all_frames:
-        single = await _one(hass, entity_id, image, mime, preset, width, height)
+        single = await _one(hass, entity_id, frames[0], preset, budget)
         single["ms"] = int((time.monotonic() - start) * 1000)
         return single
-
-    if n_frames > MAX_FRAMES:
-        raise ImageRejected("too_large", "too many frames")
-    pngs = await hass.async_add_executor_job(_frames_png, image)
-    frames = [
-        await _one(hass, entity_id, png, "image/png", preset, width, height)
-        for png in pngs
-    ]
-    return {
-        "frames": frames,
-        "text": "\n\n".join(f["text"] for f in frames),
-        "blocks": [],
-        "width": width,
-        "height": height,
-        "ms": int((time.monotonic() - start) * 1000),
-        "engine": f"ai_task:{entity_id}",
-        "model": None,
-        "preset": preset,
-        "confidence": None,
-    }
+    results = [await _one(hass, entity_id, frame, preset, budget) for frame in frames]
+    return {"frames": results, "text": "\n\n".join(r["text"] for r in results)}

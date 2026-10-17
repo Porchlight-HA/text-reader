@@ -86,6 +86,7 @@ async def test_ai_malformed_structure_normalised(hass):
     assert out["fields"] == {
         "addressee": None,
         "return_address": None,
+        "indicia": [],
         "markers": [],
         "generic_addressee": False,
     }
@@ -95,10 +96,10 @@ async def test_ai_malformed_structure_normalised(hass):
     assert out["fields"] == {"tracking": [], "ship_to": None}
     with patch(PATCH, AsyncMock(return_value=_result({"value": "12", "digits": 4}))):
         out = await ai_read(hass, ENTITY, _png(), preset="meter")
-    assert out["fields"] == {"value": None, "digits": ""}
+    assert out["fields"] == {"value": None, "digits": "", "confidence": None}
     with patch(PATCH, AsyncMock(return_value=_result(None))):
         out = await ai_read(hass, ENTITY, _png(), preset="text")
-    assert out["text"] == "" and out["fields"] == {}
+    assert out["text"] == "" and out["fields"] is None
 
 
 async def test_ai_refusal_text_only(hass):
@@ -154,13 +155,12 @@ async def test_ai_all_frames_one_call_per_frame(hass):
     )
 
 
-async def test_ai_all_frames_too_many(hass):
+async def test_ai_all_frames_too_many(hass, monkeypatch):
     _entity(hass)
-    with patch(PATCH, AsyncMock()) as gen, patch.object(
-        ai_backend, "_header", return_value=(1, 1, "image/gif", 51)
-    ):
+    monkeypatch.setattr(ai_backend, "MAX_FRAMES", 2)
+    with patch(PATCH, AsyncMock()) as gen:
         with pytest.raises(ImageRejected) as err:
-            await ai_read(hass, ENTITY, b"x", preset="text", all_frames=True)
+            await ai_read(hass, ENTITY, _png(frames=3), preset="text", all_frames=True)
     assert err.value.code == "too_large"
     gen.assert_not_called()
 
@@ -177,7 +177,7 @@ async def test_ai_corrupt_frame_rejected(hass):
     image = _png(frames=2)
     with patch(PATCH, AsyncMock()) as gen, patch.object(
         GifImagePlugin.GifImageFile, "seek", side_effect=OSError("truncated")
-    ), patch.object(ai_backend, "_header", return_value=(20, 10, "image/gif", 2)):
+    ):
         with pytest.raises(ImageRejected) as err:
             await ai_read(hass, ENTITY, image, preset="text", all_frames=True)
     assert err.value.code == "unsupported_image"
@@ -263,3 +263,225 @@ def test_structure_validates_like_service(preset):
         "meter": {"text": "t", "value": 12.5, "digits": "0012"},
     }[preset]
     assert schema(sample) == sample
+
+
+# --- final review: one image normaliser for every AI path (I2) ------------------------------
+
+
+def _capture(hass, sent: list, data=None):
+    """A fake async_generate_data that records the staged bytes and mime of each call."""
+    from pathlib import Path
+
+    tmp = Path(hass.config.path(TMP_DIRNAME))
+
+    async def fake(hass_, **kwargs):
+        att = kwargs["attachments"][0]
+        token = att["media_content_id"].rsplit("/", 1)[1]
+        sent.append(((tmp / token).read_bytes(), att["media_content_type"]))
+        return _result(data if data is not None else {"text": "t"})
+
+    return fake
+
+
+def _rotated_jpeg(size=(200, 100)) -> bytes:
+    """Stored left half red, right half blue; EXIF orientation 6 (displayed rotated 90° CW)."""
+    img = Image.new("RGB", size, "red")
+    img.paste(Image.new("RGB", (size[0] // 2, size[1]), "blue"), (size[0] // 2, 0))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", exif=exif.tobytes(), quality=95)
+    return buf.getvalue()
+
+
+async def test_ai_exif_rotation_and_region_in_rotated_space(hass):
+    _entity(hass)
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        out = await ai_read(hass, ENTITY, _rotated_jpeg(), preset="text", region=(0, 100, 100, 100))
+    data, mime = sent[0]
+    img = Image.open(io.BytesIO(data))
+    assert mime == "image/png" and img.format == "PNG"
+    assert img.size == (100, 100)
+    r, g, b = img.convert("RGB").getpixel((50, 50))
+    assert b > 200 and r < 60  # displayed bottom half is the stored right half: blue
+    # Width and height are the rotated, uncropped size, as the local App reports.
+    assert (out["width"], out["height"]) == (100, 200)
+
+
+async def test_ai_exif_rotation_without_region_is_reencoded(hass):
+    _entity(hass)
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        out = await ai_read(hass, ENTITY, _rotated_jpeg(), preset="text")
+    img = Image.open(io.BytesIO(sent[0][0]))
+    assert img.size == (100, 200)
+    assert (out["width"], out["height"]) == (100, 200)
+
+
+async def test_ai_mpo_is_sent_as_png(hass):
+    _entity(hass)
+    frames = [Image.new("RGB", (40, 30), "green"), Image.new("RGB", (40, 30), "white")]
+    buf = io.BytesIO()
+    frames[0].save(buf, "MPO", save_all=True, append_images=frames[1:])
+    assert Image.open(io.BytesIO(buf.getvalue())).format == "MPO"
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        await ai_read(hass, ENTITY, buf.getvalue(), preset="text")
+    data, mime = sent[0]
+    img = Image.open(io.BytesIO(data))
+    assert mime == "image/png" and img.format == "PNG"
+    assert getattr(img, "n_frames", 1) == 1
+
+
+async def test_ai_animated_gif_sends_frame_zero_only(hass):
+    _entity(hass)
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)) as _:
+        out = await ai_read(hass, ENTITY, _png(frames=3), preset="text")
+    assert len(sent) == 1
+    data, mime = sent[0]
+    img = Image.open(io.BytesIO(data))
+    assert mime == "image/png" and getattr(img, "n_frames", 1) == 1
+    assert img.convert("RGB").getpixel((0, 0))[0] < 5  # frame 0 is black; frames 1, 2 are red-ish
+    assert (out["width"], out["height"]) == (20, 10)
+
+
+async def test_ai_plain_image_passes_through_unchanged(hass):
+    _entity(hass)
+    buf = io.BytesIO()
+    Image.new("RGB", (30, 20), "white").save(buf, "JPEG")
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        await ai_read(hass, ENTITY, buf.getvalue(), preset="text")
+    assert sent[0] == (buf.getvalue(), "image/jpeg")
+
+
+async def test_ai_large_photo_reencoded_as_jpeg(hass):
+    _entity(hass)
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        await ai_read(hass, ENTITY, _rotated_jpeg((2000, 1200)), preset="text")
+    data, mime = sent[0]
+    assert mime == "image/jpeg" and Image.open(io.BytesIO(data)).size == (1200, 2000)
+
+
+async def test_ai_over_40_megapixels_rejected(hass, monkeypatch):
+    _entity(hass)
+    monkeypatch.setattr(ai_backend, "MAX_PIXELS", 199)
+    with patch(PATCH, AsyncMock()) as gen, pytest.raises(ImageRejected) as err:
+        await ai_read(hass, ENTITY, _png(), preset="text")  # 20 x 10 = 200 px
+    assert err.value.code == "too_large"
+    gen.assert_not_called()
+
+
+async def test_ai_decompression_bomb_rejected(hass, monkeypatch):
+    _entity(hass)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 50)  # Pillow refuses above twice this
+    with patch(PATCH, AsyncMock()) as gen, pytest.raises(ImageRejected) as err:
+        await ai_read(hass, ENTITY, _png(), preset="text")
+    assert err.value.code == "too_large"
+    gen.assert_not_called()
+
+
+def test_forty_megapixel_limit_matches_the_app():
+    assert ai_backend.MAX_PIXELS == 40_000_000
+
+
+async def test_ai_frame_index_out_of_range_rejected(hass):
+    _entity(hass)
+    with patch(PATCH, AsyncMock()) as gen, pytest.raises(ImageRejected) as err:
+        await ai_read(hass, ENTITY, _png(frames=2), preset="text", index=5)
+    assert err.value.code == "bad_request"
+    gen.assert_not_called()
+
+
+# --- final review: any AI failure is AiUnavailable (I3), with a time budget (I4) ----------
+
+
+async def test_ai_unexpected_error_is_unavailable(hass):
+    _entity(hass)
+    with patch(PATCH, AsyncMock(side_effect=RuntimeError("secret text"))):
+        with pytest.raises(AiUnavailable) as err:
+            await ai_read(hass, ENTITY, _png(), preset="text")
+    assert str(err.value) == "RuntimeError"
+    assert err.value.__cause__ is None and err.value.__suppress_context__
+
+
+async def test_ai_staging_oserror_is_unavailable(hass):
+    _entity(hass)
+    with patch.object(
+        __import__("custom_components.text_reader.attachments", fromlist=["_write"]),
+        "_write", side_effect=OSError("disk full"),
+    ), patch(PATCH, AsyncMock()) as gen, pytest.raises(AiUnavailable, match="OSError"):
+        await ai_read(hass, ENTITY, _png(), preset="text")
+    gen.assert_not_called()
+
+
+async def test_ai_cancellation_propagates(hass):
+    import asyncio
+
+    _entity(hass)
+    with patch(PATCH, AsyncMock(side_effect=asyncio.CancelledError)), pytest.raises(
+        asyncio.CancelledError
+    ):
+        await ai_read(hass, ENTITY, _png(), preset="text")
+
+
+async def test_ai_call_has_a_time_budget(hass, monkeypatch):
+    import asyncio
+
+    _entity(hass)
+    monkeypatch.setattr(ai_backend, "AI_MIN_TIMEOUT", 0.01)
+
+    async def slow(hass_, **kwargs):
+        await asyncio.sleep(5)
+
+    with patch(PATCH, slow), pytest.raises(AiUnavailable, match="timeout"):
+        await ai_read(hass, ENTITY, _png(), preset="text", timeout=0.01)
+    assert not list(Path_tmp(hass).iterdir())
+
+
+def test_ai_budget_is_at_least_120_s():
+    assert ai_backend.AI_MIN_TIMEOUT == 120
+    assert ai_backend.ai_budget(30) == 120
+    assert ai_backend.ai_budget(300) == 300
+
+
+def Path_tmp(hass):
+    from pathlib import Path
+
+    return Path(hass.config.path(TMP_DIRNAME))
+
+
+# --- final review: field shape parity with the local App (M1, M2) -------------------------
+
+
+async def test_ai_field_shapes_match_local(hass):
+    _entity(hass)
+    env = {"text": "t", "addressee": [], "return_address": [], "markers": [], "generic_addressee": False}
+    with patch(PATCH, AsyncMock(return_value=_result(env))):
+        out = await ai_read(hass, ENTITY, _png(), preset="envelope")
+    assert out["fields"] == {
+        "addressee": None, "return_address": None, "indicia": [], "markers": [],
+        "generic_addressee": False,
+    }
+    with patch(PATCH, AsyncMock(return_value=_result({"text": "t", "value": 12, "digits": "12"}))):
+        out = await ai_read(hass, ENTITY, _png(), preset="meter")
+    assert out["fields"] == {"value": 12.0, "digits": "12", "confidence": None}
+    with patch(PATCH, AsyncMock(return_value=_result({"text": "t", "tracking": [], "ship_to": []}))):
+        out = await ai_read(hass, ENTITY, _png(), preset="label")
+    assert out["fields"] == {"tracking": [], "ship_to": None}
+    with patch(PATCH, AsyncMock(return_value=_result({"text": "t"}))):
+        out = await ai_read(hass, ENTITY, _png(), preset="text")
+    assert out["fields"] is None
+
+
+async def test_ai_all_frames_top_level_matches_local(hass):
+    _entity(hass)
+    with patch(PATCH, AsyncMock(return_value=_result({"text": "a"}))):
+        out = await ai_read(hass, ENTITY, _png(frames=2), preset="envelope", all_frames=True)
+    assert set(out) == {"frames", "text"}
+    for frame in out["frames"]:
+        assert {"text", "blocks", "fields", "width", "height", "ms", "engine", "model", "preset",
+                "confidence"} <= set(frame)
