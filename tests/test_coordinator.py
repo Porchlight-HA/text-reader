@@ -123,6 +123,19 @@ async def test_401_triggers_reauth(hass, aioclient_mock):
     assert any(f["context"]["source"] == "reauth" for f in flows)
 
 
+async def test_401_never_raises_app_not_running(hass, aioclient_mock):
+    await _setup(hass, aioclient_mock, managed=True, slug="s")
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/v1/health", status=401, json={"error": "unauthorized"})
+    await _poll(hass, 4)
+    assert _issue(hass, "app_not_running") is None
+    flows = [
+        f for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if f["context"]["source"] == "reauth"
+    ]
+    assert len(flows) == 1
+
+
 async def test_status_entity_on_off(hass, aioclient_mock):
     entry = await _setup(hass, aioclient_mock)
     reg = er.async_get(hass)

@@ -29,7 +29,7 @@ from .api import (
     LocalOcrError,
     Unauthorized,
 )
-from .const import DOMAIN
+from .const import DOMAIN, SIGNAL_DURATION_UPDATED
 from .data import LocalOcrConfigEntry
 
 SERVICE_READ_IMAGE = "read_image"
@@ -213,7 +213,7 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
             if not isinstance(ms, (int, float)):
                 ms = (monotonic() - start) * 1000
             entry.runtime_data.last_duration_ms = round(ms)
-            async_dispatcher_send(hass, f"{DOMAIN}_duration_updated")
+            async_dispatcher_send(hass, SIGNAL_DURATION_UPDATED)
             return result
         except Busy as busy:
             delay = max(busy.retry_after, 0.5)

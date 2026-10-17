@@ -49,6 +49,7 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
         self._polls = 0
         self._info: Info | None = None
         self._failures = 0
+        self._auth_failed = False
 
     async def _async_update_data(self) -> Status:
         client = self.config_entry.runtime_data.client
@@ -58,9 +59,13 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
                 self._info = await client.info()
             health = await client.health()
             self._failures = 0
+            self._auth_failed = False
         except Unauthorized:
-            self.config_entry.async_start_reauth(self.hass)
-            self._failures += 1
+            # The app answered; the token is wrong. Not a connection failure.
+            self._failures = 0
+            if not self._auth_failed:
+                self._auth_failed = True
+                self.config_entry.async_start_reauth(self.hass)
         except (CannotConnect, LocalOcrError):
             self._failures += 1
         self._polls += 1
@@ -72,7 +77,7 @@ class LocalOcrCoordinator(DataUpdateCoordinator[Status]):
         entry = self.config_entry
         health, info = status.health, status.info
         active: dict[str, tuple[bool, str, dict[str, str]]] = {}
-        if status.consecutive_failures >= FAILURES_FOR_ISSUE:
+        if status.consecutive_failures >= FAILURES_FOR_ISSUE and not self._auth_failed:
             fixable = bool(entry.data.get("managed") and entry.data.get("slug"))
             key = "app_not_running" if fixable else "app_not_running_unmanaged"
             active["app_not_running"] = (fixable, key, {})

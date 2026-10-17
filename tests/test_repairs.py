@@ -30,7 +30,7 @@ async def test_fix_flow_starts_addon_when_managed(hass):
     entry = _entry(hass, slug="abc_local_ocr")
     entry.runtime_data = type("R", (), {"coordinator": None})()
     with patch(
-        "custom_components.local_ocr.repairs.AddonManager"
+        "homeassistant.components.hassio.AddonManager"
     ) as mgr_cls:
         mgr_cls.return_value.async_start_addon = AsyncMock()
         result = await _run(hass, entry)
@@ -42,8 +42,24 @@ async def test_fix_flow_starts_addon_when_managed(hass):
 
 async def test_fix_flow_aborts_on_addon_error(hass):
     entry = _entry(hass, slug="abc_local_ocr")
-    with patch("custom_components.local_ocr.repairs.AddonManager") as mgr_cls:
+    with patch("homeassistant.components.hassio.AddonManager") as mgr_cls:
         mgr_cls.return_value.async_start_addon = AsyncMock(side_effect=AddonError("x"))
         result = await _run(hass, entry)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "cannot_start"
+
+
+async def test_fix_flow_aborts_when_entry_gone(hass):
+    flow = await async_create_fix_flow(hass, "app_not_running", {"entry_id": "missing"})
+    flow.hass = hass
+    flow.issue_id = "app_not_running"
+    flow.handler = DOMAIN
+    result = await flow.async_step_confirm({})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "cannot_start"
+
+
+async def test_fix_flow_aborts_without_slug(hass):
+    result = await _run(hass, _entry(hass))
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "cannot_start"

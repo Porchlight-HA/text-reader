@@ -8,11 +8,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import SIGNAL_DURATION_UPDATED
 from .data import LocalOcrConfigEntry
 from .entity import LocalOcrEntity
 
-SIGNAL_DURATION = f"{DOMAIN}_duration_updated"
 
 
 async def async_setup_entry(
@@ -41,7 +40,7 @@ class LocalOcrLastDuration(LocalOcrEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_DURATION, self._on_duration)
+            async_dispatcher_connect(self.hass, SIGNAL_DURATION_UPDATED, self._on_duration)
         )
 
     @callback
