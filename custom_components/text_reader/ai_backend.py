@@ -8,8 +8,6 @@ import time
 from typing import Any
 
 import probatio
-from homeassistant.components.ai_task import AITaskEntityFeature, async_generate_data
-from homeassistant.components.ai_task.const import DATA_COMPONENT
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -57,23 +55,40 @@ _TRACKING: dict[str, Any] = {
 
 # Same shape the ai_task.generate_data service accepts for `structure`.
 _STRUCTURE_SPECS: dict[str, dict[str, dict[str, Any]]] = {
-    "text": {"text": {"selector": _STRING, "required": True}},
+    "text": {
+        "text": {"selector": _STRING, "required": True, "description": "All text, top to bottom"},
+    },
     "envelope": {
-        "text": {"selector": _STRING, "required": True},
-        "addressee": {"selector": _STRING_LIST},
-        "return_address": {"selector": _STRING_LIST},
-        "markers": {"selector": _STRING_LIST},
-        "generic_addressee": {"selector": {"boolean": {}}},
+        "text": {"selector": _STRING, "required": True, "description": "All text, top to bottom"},
+        "addressee": {"selector": _STRING_LIST, "description": "Recipient address lines, top to bottom"},
+        "return_address": {"selector": _STRING_LIST, "description": "Sender address lines, top to bottom"},
+        "markers": {
+            "selector": _STRING_LIST,
+            "required": True,
+            "description": "Bulk-mail markers such as PRSRT STD, ECRWSS",
+        },
+        "generic_addressee": {
+            "selector": {"boolean": {}},
+            "required": True,
+            "description": "True if addressed to Current Resident, Occupant or similar",
+        },
     },
     "label": {
-        "text": {"selector": _STRING, "required": True},
-        "tracking": {"selector": _TRACKING},
-        "ship_to": {"selector": _STRING_LIST},
+        "text": {"selector": _STRING, "required": True, "description": "All text, top to bottom"},
+        "tracking": {
+            "selector": _TRACKING,
+            "required": True,
+            "description": "Tracking numbers with carrier ups/usps/fedex/dhl",
+        },
+        "ship_to": {"selector": _STRING_LIST, "description": "Ship-to address lines, top to bottom"},
     },
     "meter": {
-        "text": {"selector": _STRING, "required": True},
-        "value": {"selector": {"number": {"mode": "box", "step": "any"}}},
-        "digits": {"selector": _STRING, "required": True},
+        "text": {"selector": _STRING, "required": True, "description": "All text, top to bottom"},
+        "value": {
+            "selector": {"number": {"mode": "box", "step": "any"}},
+            "description": "The meter reading as a number",
+        },
+        "digits": {"selector": _STRING, "required": True, "description": "The digits shown, as printed"},
     },
 }
 
@@ -156,6 +171,10 @@ def normalise(preset: str, data: Any) -> tuple[str, dict[str, Any]]:
 
 
 def _entity_problem(hass: HomeAssistant, entity_id: str) -> str | None:
+    # Lazy: ai_task pulls in conversation, which core/venv installs may lack.
+    from homeassistant.components.ai_task import AITaskEntityFeature
+    from homeassistant.components.ai_task.const import DATA_COMPONENT
+
     component = hass.data.get(DATA_COMPONENT)
     entity = component.get_entity(entity_id) if component is not None else None
     if entity is None:
@@ -181,23 +200,28 @@ def _header(image: bytes) -> tuple[int, int, str, int]:
                 getattr(img, "n_frames", 1),
             )
     except Exception as err:
-        raise ImageRejected("bad_image", "could not decode image") from err
+        raise ImageRejected("unsupported_image", "could not decode image") from err
 
 
 def _frames_png(image: bytes) -> list[bytes]:
     out: list[bytes] = []
-    with Image.open(io.BytesIO(image)) as img:
-        for index in range(getattr(img, "n_frames", 1)):
-            img.seek(index)
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="PNG")
-            out.append(buf.getvalue())
+    try:
+        with Image.open(io.BytesIO(image)) as img:
+            for index in range(getattr(img, "n_frames", 1)):
+                img.seek(index)
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="PNG")
+                out.append(buf.getvalue())
+    except Exception as err:
+        raise ImageRejected("unsupported_image", "could not decode frame") from err
     return out
 
 
 async def _call(
     hass: HomeAssistant, entity_id: str, data: bytes, mime: str, preset: str
 ) -> Any:
+    from homeassistant.components.ai_task import async_generate_data
+
     async with stage_image(hass, data, mime) as media_content_id:
         try:
             result = await async_generate_data(
@@ -252,32 +276,35 @@ async def ai_read(
     all_frames: bool = False,
 ) -> dict[str, Any]:
     """Read an image with the AI Task entity; returns a contract-shaped dict."""
-    problem = _entity_problem(hass, entity_id)
+    start = time.monotonic()
+    try:
+        problem = _entity_problem(hass, entity_id)
+    except ImportError as err:
+        raise AiUnavailable("ai_task_missing") from err
     if problem is not None:
         raise AiUnavailable(problem)
 
     width, height, mime, n_frames = await hass.async_add_executor_job(_header, image)
     if not all_frames:
-        return await _one(hass, entity_id, image, mime, preset, width, height)
+        single = await _one(hass, entity_id, image, mime, preset, width, height)
+        single["ms"] = int((time.monotonic() - start) * 1000)
+        return single
 
     if n_frames > MAX_FRAMES:
         raise ImageRejected("too_large", "too many frames")
-    start = time.monotonic()
     pngs = await hass.async_add_executor_job(_frames_png, image)
     frames = [
         await _one(hass, entity_id, png, "image/png", preset, width, height)
         for png in pngs
     ]
-    first = frames[0]
     return {
         "frames": frames,
         "text": "\n\n".join(f["text"] for f in frames),
         "blocks": [],
-        "fields": first["fields"],
         "width": width,
         "height": height,
         "ms": int((time.monotonic() - start) * 1000),
-        "engine": first["engine"],
+        "engine": f"ai_task:{entity_id}",
         "model": None,
         "preset": preset,
         "confidence": None,

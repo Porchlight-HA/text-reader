@@ -9,7 +9,7 @@ import pytest
 from homeassistant.components.ai_task import AITaskEntityFeature
 from homeassistant.components.ai_task.const import DATA_COMPONENT
 from homeassistant.exceptions import HomeAssistantError
-from PIL import Image
+from PIL import GifImagePlugin, Image
 
 from custom_components.text_reader import ai_backend
 from custom_components.text_reader.ai_backend import (
@@ -24,7 +24,7 @@ from custom_components.text_reader.attachments import TMP_DIRNAME
 
 ENTITY = "ai_task.test"
 FULL = AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
-PATCH = "custom_components.text_reader.ai_backend.async_generate_data"
+PATCH = "homeassistant.components.ai_task.async_generate_data"
 
 
 def _png(size=(20, 10), frames=1) -> bytes:
@@ -167,8 +167,49 @@ async def test_ai_all_frames_too_many(hass):
 
 async def test_ai_bad_image_rejected(hass):
     _entity(hass)
-    with pytest.raises(ImageRejected):
+    with pytest.raises(ImageRejected) as err:
         await ai_read(hass, ENTITY, b"not an image", preset="text")
+    assert err.value.code == "unsupported_image"
+
+
+async def test_ai_corrupt_frame_rejected(hass):
+    _entity(hass)
+    image = _png(frames=2)
+    with patch(PATCH, AsyncMock()) as gen, patch.object(
+        GifImagePlugin.GifImageFile, "seek", side_effect=OSError("truncated")
+    ), patch.object(ai_backend, "_header", return_value=(20, 10, "image/gif", 2)):
+        with pytest.raises(ImageRejected) as err:
+            await ai_read(hass, ENTITY, image, preset="text", all_frames=True)
+    assert err.value.code == "unsupported_image"
+    gen.assert_not_called()
+
+
+async def test_ai_task_import_error_is_unavailable(hass):
+    import sys
+
+    _entity(hass)
+    with patch.dict(sys.modules, {"homeassistant.components.ai_task": None}):
+        with pytest.raises(AiUnavailable, match="ai_task_missing"):
+            await ai_read(hass, ENTITY, _png(), preset="text")
+
+
+async def test_ai_all_frames_has_no_top_level_fields(hass):
+    _entity(hass)
+    with patch(PATCH, AsyncMock(return_value=_result({"text": "a"}))):
+        out = await ai_read(hass, ENTITY, _png(frames=2), preset="text", all_frames=True)
+    assert "fields" not in out and len(out["frames"]) == 2
+
+
+def test_structure_required_and_nullable():
+    import probatio
+
+    def req(preset):
+        return {str(k) for k in structure_for(preset).schema if isinstance(k, probatio.Required)}
+
+    assert req("text") == {"text"}
+    assert req("envelope") == {"text", "markers", "generic_addressee"}
+    assert req("label") == {"text", "tracking"}
+    assert req("meter") == {"text", "digits"}
 
 
 async def test_ai_staged_files_deleted_after_call(hass):
@@ -217,7 +258,7 @@ def test_structure_validates_like_service(preset):
     schema = structure_for(preset)
     sample = {
         "text": {"text": "t"},
-        "envelope": {"text": "t", "addressee": ["a"], "generic_addressee": True},
+        "envelope": {"text": "t", "addressee": ["a"], "markers": [], "generic_addressee": True},
         "label": {"text": "t", "tracking": [{"carrier": "UPS", "number": "1Z"}]},
         "meter": {"text": "t", "value": 12.5, "digits": "0012"},
     }[preset]
