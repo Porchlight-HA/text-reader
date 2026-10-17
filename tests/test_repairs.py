@@ -158,3 +158,24 @@ async def test_local_unsupported_without_ai_entity_just_explains(hass):
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "no_ai_assistant"
     assert "backend" not in entry.options
+
+
+async def test_local_unsupported_confirm_names_the_assistant(hass):
+    import json
+    from pathlib import Path
+
+    entry = _entry(hass)
+    hass.config_entries.async_update_entry(entry, options={"ai_entity": "ai_task.vision"})
+    flow = await async_create_fix_flow(hass, "local_unsupported_here", {"entry_id": entry.entry_id})
+    flow.hass = hass
+    flow.issue_id = "local_unsupported_here"
+    flow.handler = DOMAIN
+    result = await flow.async_step_init()
+    assert result["step_id"] == "confirm"
+    assert result["description_placeholders"] == {"entity": "ai_task.vision"}
+    strings = json.loads(
+        (Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text()
+    )
+    confirm = strings["issues"]["local_unsupported_here"]["fix_flow"]["step"]["confirm"]
+    assert confirm["description"].endswith(
+        "Switch Text Reader to your AI assistant ({entity})?")

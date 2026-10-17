@@ -150,6 +150,7 @@ class LocalUnsupportedFlow(RepairsFlow):
             return self.async_show_form(
                 step_id="confirm",
                 data_schema=vol.Schema({}),  # type: ignore[arg-type]  # HA shims voluptuous to probatio
+                description_placeholders={"entity": settings(entry).ai_entity or ""},
             )
         self.hass.config_entries.async_update_entry(
             entry, options={**entry.options, "backend": "ai_task"}

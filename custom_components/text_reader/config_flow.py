@@ -583,16 +583,17 @@ class TextReaderOptionsFlow(OptionsFlowWithReload):
         options = {k: v for k, v in user_input.items() if k != "privacy_ack"}
         options["ai_entity"] = ai_entity
         if backend in LOCAL_BACKENDS and not entry.data.get("url"):
-            return options, "local_not_set_up"
-        if backend in AI_BACKENDS:
-            if ai_entity is None:
-                return options, "ai_entity_required"
-            already_acked = current.backend in AI_BACKENDS and current.ai_entity == ai_entity
-            # A new choice must be able to read images. The entity already in use is not re-checked,
-            # so a briefly unavailable assistant doesn't block saving other options (repairs cover it).
-            if not already_acked and ai_entity not in eligible_entities(self.hass):
+            # On Supervisor, the App's discovery adds it to this entry once it runs.
+            return options, "local_not_set_up_app" if is_hassio(self.hass) else "local_not_set_up"
+        if backend in AI_BACKENDS and ai_entity is None:
+            return options, "ai_entity_required"
+        # Whatever the backend: a per-call backend or a repair can send images to any stored
+        # entity, so every entity is stored only with an ack. The stored one was acked when it was
+        # set, and is not re-checked, so a briefly unavailable assistant doesn't block other options.
+        if ai_entity is not None and ai_entity != current.ai_entity:
+            if ai_entity not in eligible_entities(self.hass):
                 return options, "ai_entity_invalid"
-            if not already_acked and not user_input.get("privacy_ack"):
+            if not user_input.get("privacy_ack"):
                 return options, "privacy_ack_required"
         return options, None
 

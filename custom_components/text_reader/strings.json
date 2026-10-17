@@ -365,7 +365,7 @@
         "step": {
           "confirm": {
             "title": "Switch to your AI assistant",
-            "description": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Switch Text Reader to your AI assistant?"
+            "description": "This device can't run the Local OCR app (needs 64-bit and 2 GB+ memory). Switch Text Reader to your AI assistant ({entity})?"
           }
         },
         "abort": {

@@ -943,3 +943,67 @@ async def test_ai_selector_falls_back_without_feature_filter(hass):
 
     assert selector.config["filter"][0]["supported_features"] == [
         AITaskEntityFeature.SUPPORT_ATTACHMENTS]
+
+
+# --- final review I1: an AI entity is never stored without privacy_ack ---------------------
+
+BASE = {"preset": "text", "min_confidence": 0.5, "timeout": 30, "auto_threshold": 0.8}
+
+
+async def test_options_local_backend_new_entity_needs_ack(hass):
+    ai_entities(hass, AI)
+    entry = _local_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**BASE, "backend": "local", "ai_entity": AI})
+    assert result["errors"] == {"base": "privacy_ack_required"}
+    assert entry.options["ai_entity"] is None
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**BASE, "backend": "local", "ai_entity": AI, "privacy_ack": True})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["ai_entity"] == AI and entry.options["backend"] == "local"
+
+
+async def test_options_local_backend_rejects_ineligible_entity(hass):
+    ai_entities(hass, AI)
+    hass.states.async_set("ai_task.text_only", "unknown")
+    entry = _local_entry(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {**BASE, "backend": "local", "ai_entity": "ai_task.text_only", "privacy_ack": True})
+    assert result["errors"] == {"base": "ai_entity_invalid"}
+    assert entry.options["ai_entity"] is None
+
+
+async def test_options_stored_entity_needs_no_new_ack(hass):
+    # Stored with an ack (setup or options), so other changes don't ask again, whatever the
+    # backend; even if the assistant is briefly unavailable.
+    entry = _local_entry(hass, backend="local", ai_entity=AI)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**BASE, "backend": "auto", "ai_entity": AI, "timeout": 45})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["backend"] == "auto" and entry.options["timeout"] == 45
+
+
+async def test_options_local_not_set_up_on_supervisor_says_install_the_app(hass):
+    ai_entities(hass, AI)
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Text Reader",
+                            data={"backend": "ai_task", "ai_entity": AI},
+                            options={**OPTIONS, "backend": "ai_task", "ai_entity": AI})
+    entry.add_to_hass(hass)
+    with patch(f"{CF}.is_hassio", return_value=True):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {**BASE, "backend": "auto", "ai_entity": AI})
+    assert result["errors"] == {"base": "local_not_set_up_app"}
+
+
+def test_options_local_not_set_up_copy():
+    import json
+    from pathlib import Path
+
+    strings = json.loads((Path(__file__).parents[1] / "custom_components/text_reader/strings.json").read_text())
+    assert strings["options"]["error"]["local_not_set_up_app"] == (
+        "Install and start the Local OCR app; Text Reader will find it automatically.")
