@@ -9,6 +9,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .api import LocalOcrClient
+from .attachments import cleanup_leftovers, tmp_dir
 from .const import DOMAIN
 from .coordinator import TextReaderCoordinator
 from .data import TextReaderConfigEntry, TextReaderRuntimeData
@@ -22,6 +23,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the Text Reader actions."""
     async_register_services(hass)
+    await hass.async_add_executor_job(cleanup_leftovers, tmp_dir(hass))
     return True
 
 
