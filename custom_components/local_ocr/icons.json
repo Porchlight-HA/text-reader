@@ -1,0 +1,5 @@
+{
+  "services": {
+    "read_image": { "service": "mdi:text-recognition" }
+  }
+}

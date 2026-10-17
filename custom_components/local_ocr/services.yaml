@@ -1,0 +1,54 @@
+read_image:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: local_ocr
+    image_entity:
+      required: false
+      selector:
+        entity:
+          domain: image
+    camera_entity:
+      required: false
+      selector:
+        entity:
+          domain: camera
+    file_path:
+      required: false
+      example: /config/www/mail.jpg
+      selector:
+        text:
+    media_content_id:
+      required: false
+      selector:
+        media:
+    preset:
+      required: false
+      selector:
+        select:
+          translation_key: preset
+          options:
+            - text
+            - envelope
+            - meter
+            - label
+    region:
+      required: false
+      example: '{"x": 0.1, "y": 0.2, "w": 0.5, "h": 0.4}'
+      selector:
+        object:
+    min_confidence:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.05
+          mode: slider
+    all_frames:
+      required: false
+      default: false
+      selector:
+        boolean:
