@@ -9,12 +9,17 @@
       "zeroconf_confirm": {
         "title": "Local OCR found",
         "description": "Found a Local OCR server at {url}.",
-        "data": { "token": "Access token" }
+        "data": {
+          "token": "Access token"
+        }
       },
       "user": {
         "title": "Connect to Local OCR",
         "description": "Enter the address of your Local OCR server.",
-        "data": { "url": "URL", "token": "Access token (optional)" }
+        "data": {
+          "url": "URL",
+          "token": "Access token (optional)"
+        }
       },
       "test": {
         "title": "Test the connection",
@@ -23,11 +28,15 @@
       "reauth_confirm": {
         "title": "Access token needed",
         "description": "The Local OCR server rejected the access token. Enter the current one.",
-        "data": { "token": "Access token" }
+        "data": {
+          "token": "Access token"
+        }
       },
       "reconfigure": {
         "title": "Reconfigure Local OCR",
-        "data": { "url": "URL" }
+        "data": {
+          "url": "URL"
+        }
       }
     },
     "error": {
@@ -63,6 +72,73 @@
         "envelope": "Envelope",
         "meter": "Meter",
         "label": "Label"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "Local OCR is not set up or not loaded."
+    },
+    "exactly_one_source": {
+      "message": "Provide exactly one of image_entity, camera_entity, file_path or media_content_id."
+    },
+    "path_not_allowed": {
+      "message": "Home Assistant isn't allowed to read {path}. Add its folder to allowlist_external_dirs."
+    },
+    "no_image": {
+      "message": "{entity_id} has no image right now."
+    },
+    "image_rejected": {
+      "message": "The image couldn't be read ({code})."
+    },
+    "app_unavailable": {
+      "message": "The Local OCR app isn't running."
+    },
+    "timeout": {
+      "message": "Local OCR didn't answer within {timeout} s."
+    }
+  },
+  "services": {
+    "read_image": {
+      "name": "Read image",
+      "description": "Reads the text in an image with the Local OCR app and returns the result.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Local OCR server",
+          "description": "Which Local OCR server to use. Optional when only one is set up."
+        },
+        "image_entity": {
+          "name": "Image entity",
+          "description": "Read the current picture of this image entity."
+        },
+        "camera_entity": {
+          "name": "Camera entity",
+          "description": "Read a snapshot from this camera."
+        },
+        "file_path": {
+          "name": "File path",
+          "description": "Read this file. Its folder must be in allowlist_external_dirs."
+        },
+        "media_content_id": {
+          "name": "Media",
+          "description": "Read this item from a media source."
+        },
+        "preset": {
+          "name": "Preset",
+          "description": "What kind of text to expect. Defaults to the preset in the integration options."
+        },
+        "region": {
+          "name": "Region",
+          "description": "Only read this part of the image, as x, y, w and h. Values of 1 or less are fractions of the image width and height; larger values are pixels."
+        },
+        "min_confidence": {
+          "name": "Minimum confidence",
+          "description": "Drop text recognised with less confidence than this (0 to 1). Defaults to the integration option."
+        },
+        "all_frames": {
+          "name": "All frames",
+          "description": "For animated images, read every frame instead of just the first."
+        }
       }
     }
   }
