@@ -7,6 +7,14 @@ from typing import Any
 
 import aiohttp
 
+# A host that drops packets never answers the TCP handshake. Give up on the connect after this long, so the
+# user sees "can't connect" instead of waiting out the whole read timeout and seeing "timeout".
+CONNECT_TIMEOUT = 10.0
+
+
+def _client_timeout(total: float) -> aiohttp.ClientTimeout:
+    return aiohttp.ClientTimeout(total=total, sock_connect=min(CONNECT_TIMEOUT, total))
+
 
 class LocalOcrError(Exception):
     """Base error."""
@@ -89,7 +97,7 @@ class LocalOcrClient:
         self._session = session
         self._url = url.rstrip("/")
         self._token = token
-        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._timeout = _client_timeout(timeout)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
@@ -105,7 +113,7 @@ class LocalOcrClient:
     ) -> dict[str, Any]:
         headers = self._headers() if auth else {}
         client_timeout = (
-            self._timeout if timeout is None else aiohttp.ClientTimeout(total=timeout)
+            self._timeout if timeout is None else _client_timeout(timeout)
         )
         try:
             async with self._session.request(

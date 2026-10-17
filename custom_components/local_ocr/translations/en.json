@@ -11,6 +11,9 @@
         "description": "Found a Local OCR server at {url}.",
         "data": {
           "token": "Access token"
+        },
+        "data_description": {
+          "token": "The LOCAL_OCR_TOKEN value the server was started with."
         }
       },
       "user": {
@@ -19,6 +22,10 @@
         "data": {
           "url": "URL",
           "token": "Access token (optional)"
+        },
+        "data_description": {
+          "url": "Where the Local OCR server listens, for example http://192.168.1.20:8738. The Local OCR app sets this up for you; you only need this form for a standalone container.",
+          "token": "The LOCAL_OCR_TOKEN value the server was started with. Leave empty if it runs without one."
         }
       },
       "test": {
@@ -34,6 +41,9 @@
         "description": "The Local OCR server rejected the access token. Enter the current one.",
         "data": {
           "token": "Access token"
+        },
+        "data_description": {
+          "token": "The LOCAL_OCR_TOKEN value the server uses now."
         }
       },
       "reauth_managed": {
@@ -44,6 +54,9 @@
         "title": "Reconfigure Local OCR",
         "data": {
           "url": "URL"
+        },
+        "data_description": {
+          "url": "The new address of the Local OCR server, for example http://192.168.1.20:8738."
         }
       }
     },
@@ -71,6 +84,11 @@
           "preset": "Default preset",
           "min_confidence": "Minimum confidence",
           "timeout": "Timeout (seconds)"
+        },
+        "data_description": {
+          "preset": "Used when an action doesn't pick a preset.",
+          "min_confidence": "Text recognised with less confidence than this is dropped (0 to 1). Used when an action doesn't set it.",
+          "timeout": "How long to wait for one read. Reads with all_frames get at least 180 s."
         }
       }
     }
@@ -97,6 +115,12 @@
     },
     "no_image": {
       "message": "{entity_id} has no image right now."
+    },
+    "file_not_found": {
+      "message": "There is no file at {path}."
+    },
+    "file_unreadable": {
+      "message": "Home Assistant couldn't read the file {path}."
     },
     "image_rejected": {
       "message": "The image couldn't be read ({code})."
@@ -127,6 +151,9 @@
     },
     "invalid_region": {
       "message": "The region must have non-negative x and y, a positive width and height, and use either all fractions (0–1) or all pixels."
+    },
+    "unexpected_error": {
+      "message": "Unexpected Local OCR error ({error}). Check the Home Assistant log."
     }
   },
   "services": {
