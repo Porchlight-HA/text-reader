@@ -485,3 +485,22 @@ async def test_ai_all_frames_top_level_matches_local(hass):
     for frame in out["frames"]:
         assert {"text", "blocks", "fields", "width", "height", "ms", "engine", "model", "preset",
                 "confidence"} <= set(frame)
+
+
+async def test_ai_transparency_flattened_onto_white(hass):
+    _entity(hass)
+    buf = io.BytesIO()
+    Image.new("RGBA", (20, 10), (0, 0, 0, 0)).save(buf, "PNG")
+    sent: list = []
+    with patch(PATCH, _capture(hass, sent)):
+        await ai_read(hass, ENTITY, buf.getvalue(), preset="text", region=(0, 0, 10, 10))
+    img = Image.open(io.BytesIO(sent[0][0]))
+    assert img.mode == "RGB" and img.getpixel((5, 5)) == (255, 255, 255)
+
+
+async def test_ai_region_outside_the_image_rejected(hass):
+    _entity(hass)
+    with patch(PATCH, AsyncMock()) as gen, pytest.raises(ImageRejected) as err:
+        await ai_read(hass, ENTITY, _png(), preset="text", region=(50, 0, 5, 5))
+    assert err.value.code == "bad_request"
+    gen.assert_not_called()
