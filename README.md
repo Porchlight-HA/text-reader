@@ -29,7 +29,8 @@ A 1 GB board or a 32-bit install can't run the App and should use the AI-only ch
 **Local is the default, and nothing leaves your network with it.** Choosing an AI assistant is an explicit step: setup and the options ask you to confirm that images are sent to that assistant, and Text Reader never uses an assistant without that confirmation.
 
 - In **AI-only** mode every image is sent to the assistant you chose. A cloud assistant (OpenAI, Google, Anthropic and so on) sends it to that provider.
-- In **both** mode only images the device couldn't read well are sent.
+- In **both** mode only images the device couldn't read well are sent, **or all images while the Local OCR app is unreachable**.
+- Calls with `backend: local` never use the assistant. A call with `backend: ai_task` sends the image to the assistant whatever the default is.
 - **Ollama is the recommended choice if you want AI that stays local**: it runs on your own machine, so the images never leave your network.
 - Images and recognised text are never stored or logged by Text Reader. Images sent to an assistant are written to a private temporary folder (`.text_reader_tmp` in your config folder, owner-only) and deleted as soon as the call ends.
 - Diagnostics contain no text and no image data.
@@ -41,7 +42,7 @@ Text Reader 0.3 is the renamed successor of the "Local OCR" integration (domain 
 
 1. Remove the old **Local OCR** integration (Settings, Devices and services, Local OCR, Delete) and uninstall its HACS download.
 2. Install **Text Reader** from HACS and add it (see Install).
-3. In automations and scripts, change `local_ocr.read_image` to `text_reader.read_image`. The fields and the response are unchanged. Entity ids change with the domain, so check dashboards that use the status and duration sensors.
+3. In automations and scripts, change `local_ocr.read_image` to `text_reader.read_image`. The existing fields are unchanged; `routed` and `confidence` are added. Entity ids may change with the domain, so check dashboards that use the status and duration sensors.
 
 The Local OCR **App** keeps its name and slug. Update it to 0.3.0 along with the integration; it then announces itself as `text_reader`.
 
@@ -52,7 +53,7 @@ The Local OCR **App** keeps its name and slug. Update it to 0.3.0 along with the
 2. **Install the App** and start it.
    [![Show the Local OCR App in your Home Assistant.](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=490c75da_local_ocr)
    <!-- The addon slug 490c75da_local_ocr is computed (sha1 of the lowercased repo URL, first 8 hex chars), not verified on a live Supervisor. -->
-   If the button does not open the App, open Settings > Apps > Install app, then Local OCR. Or skip steps 1 and 2: choosing "On this device" or "Both" in setup offers to install the App for you (on a Pi 4 the build takes about 3 minutes).
+   If the button does not open the App, open Settings > Apps > Install app, then Local OCR. Or skip steps 1 and 2: choosing "On this device" or "Both" in setup tries to install the Local OCR app for you. That needs the App repository (Porchlight-HA/local-ocr) to be public and installable; if it can't, setup shows the manual steps (the My-HA button) and waits for the app. On a Pi 4 the app's first build took about 3 minutes in testing.
 3. **Install the integration via HACS.**
    [![Open the Text Reader repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Porchlight-HA&repository=text-reader&category=integration)
    Restart Home Assistant after the download.
@@ -85,7 +86,7 @@ Optional fields:
 | `preset` | `text`, `envelope`, `meter` or `label`. Defaults to the integration option |
 | `region` | `{x, y, w, h}` crop applied before OCR. See below |
 | `backend` | `local`, `ai_task` or `auto`. Defaults to the integration option |
-| `min_confidence` | 0 to 1. Drops blocks below this confidence. Defaults to the integration option (0.5). Applies to the local reader only |
+| `min_confidence` | 0 to 1. Drops blocks below this confidence. Defaults to the integration option (0.5). Applies to the local reader only (the assistant ignores it) |
 | `all_frames` | For animated images, read every frame instead of the first |
 
 ```yaml
@@ -170,7 +171,7 @@ Repairs appear under Settings, System, Repairs and clear themselves when the pro
 
 ## Privacy details
 
-Text Reader never stores or logs images or recognised text. The App writes only its access token to disk. Logs contain sizes and timings, never content. Diagnostics (Settings, Devices and services, Text Reader, Download diagnostics) contain the backend, the AI entity id, the auto threshold, the prompt version, the App's version and health, and the last 20 requests as timing, preset, backend, `routed`, image size, block count and error class. They contain **no text**, and the token is redacted.
+Text Reader never stores or logs images or recognised text. The App writes only its access token to disk. Logs contain sizes and timings, never content. Diagnostics (Settings, Devices and services, Text Reader, Download diagnostics) contain the backend, the AI entity id, the auto threshold, the prompt version, the App's version and health, and the last 20 requests as timing, preset, the requested `backend`, the actual `routed`, image size, block count and error class. They contain **no text**, and the token is redacted.
 
 **Automation traces keep the response.** Home Assistant stores the last traces of each automation and script in `.storage/trace.saved_traces`, including `response_variable` values, so recognised text ends up there. For automations that read sensitive images (mail, for example), turn stored traces off for that automation:
 
