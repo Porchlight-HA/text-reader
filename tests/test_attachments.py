@@ -5,7 +5,7 @@ import stat
 from pathlib import Path
 
 import pytest
-from homeassistant.components.media_player.errors import BrowseError
+from homeassistant.components import media_source as ms
 from homeassistant.components.media_source import MediaSourceItem, Unresolvable
 from homeassistant.setup import async_setup_component
 
@@ -84,10 +84,29 @@ async def test_resolve_unknown_token_unresolvable(hass):
         await source.async_resolve_media(_item(hass, "nope"))
 
 
-async def test_browse_raises(hass):
+async def test_browse_is_empty_directory(hass):
     source = await async_get_media_source(hass)
-    with pytest.raises(BrowseError, match="Not browsable"):
-        await source.async_browse_media(_item(hass, ""))
+    async with stage_image(hass, b"abc", "image/png") as mcid:
+        result = await source.async_browse_media(_item(hass, ""))
+        token = mcid[len(PREFIX):]
+        assert result.title == "Text Reader"
+        assert result.can_expand is True
+        assert result.can_play is False
+        assert result.children == []
+        assert result.thumbnail is None
+        assert token not in repr(result.as_dict())
+
+
+async def test_discovered_via_media_source_api(hass):
+    assert await async_setup_component(hass, "media_source", {})
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+    async with stage_image(hass, b"abc", "image/png") as mcid:
+        media = await ms.async_resolve_media(hass, mcid, None)
+        assert media.path == _tmp(hass) / mcid[len(PREFIX):]
+        assert media.mime_type == "image/png"
+    with pytest.raises(Unresolvable):
+        await ms.async_resolve_media(hass, PREFIX + "unknown", None)
 
 
 async def test_setup_cleans_leftovers(hass):

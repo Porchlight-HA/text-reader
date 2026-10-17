@@ -68,5 +68,5 @@ async def _stage(hass: HomeAssistant, data: bytes, mime: str) -> AsyncIterator[s
         yield f"media-source://{DOMAIN}/{token}"
     finally:
         registry.pop(token, None)
-        # Delete synchronously-safe even when cancelled: no await here.
+        # No await here, so cancellation cannot skip the delete.
         _remove(path)

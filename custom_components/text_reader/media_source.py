@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import override
 
-from homeassistant.components.media_player.errors import BrowseError
+from homeassistant.components.media_player.const import MediaClass
 from homeassistant.components.media_source import (
     BrowseMediaSource,
     MediaSource,
@@ -44,5 +44,19 @@ class TextReaderMediaSource(MediaSource):
 
     @override
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
-        """Staged attachments are private."""
-        raise BrowseError("Not browsable")
+        """List nothing: staged images are short-lived, internal and private.
+
+        HA's root browser lists every source, so return an empty directory
+        rather than an error. The title is the only text field HA offers.
+        """
+        return BrowseMediaSource(
+            domain=DOMAIN,
+            identifier=None,
+            title="Text Reader",
+            media_class=MediaClass.DIRECTORY,
+            media_content_type="",
+            can_play=False,
+            can_expand=True,
+            children=[],
+            thumbnail=None,
+        )
