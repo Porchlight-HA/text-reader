@@ -1,0 +1,69 @@
+{
+  "config": {
+    "flow_title": "Local OCR",
+    "step": {
+      "hassio_confirm": {
+        "title": "Local OCR app",
+        "description": "Set up Home Assistant to use the Local OCR app that is running on this system."
+      },
+      "zeroconf_confirm": {
+        "title": "Local OCR found",
+        "description": "Found a Local OCR server at {url}.",
+        "data": { "token": "Access token" }
+      },
+      "user": {
+        "title": "Connect to Local OCR",
+        "description": "Enter the address of your Local OCR server.",
+        "data": { "url": "URL", "token": "Access token (optional)" }
+      },
+      "test": {
+        "title": "Test the connection",
+        "description": "Read {lines} lines in {seconds} s.\nAddressee: {preview}\nMarkers: {markers}"
+      },
+      "reauth_confirm": {
+        "title": "Access token needed",
+        "description": "The Local OCR server rejected the access token. Enter the current one.",
+        "data": { "token": "Access token" }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Local OCR",
+        "data": { "url": "URL" }
+      }
+    },
+    "error": {
+      "cannot_connect": "Can't reach the Local OCR app. Make sure it is installed and started.",
+      "invalid_auth": "The access token was rejected.",
+      "app_outdated": "The Local OCR app is too old for this integration. Update the app.",
+      "model_failed": "The app is running but its OCR model failed to load. Restart the app.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "Local OCR is already configured.",
+      "single_instance_allowed": "Only one Local OCR server can be configured.",
+      "reauth_successful": "The access token was updated.",
+      "reconfigure_successful": "The server address was updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Local OCR options",
+        "data": {
+          "preset": "Default preset",
+          "min_confidence": "Minimum confidence",
+          "timeout": "Timeout (seconds)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "preset": {
+      "options": {
+        "text": "Text",
+        "envelope": "Envelope",
+        "meter": "Meter",
+        "label": "Label"
+      }
+    }
+  }
+}
