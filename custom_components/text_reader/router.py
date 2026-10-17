@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from PIL import Image
 
-from .ai_backend import AiUnavailable, ai_read
+from .ai_backend import MAX_FRAMES, AiUnavailable, ai_read
 from .api import CannotConnect, ImageRejected, Timeout
 from .data import TextReaderConfigEntry, settings
 
@@ -72,26 +72,40 @@ def _label_ai(result: dict[str, Any], routed: str) -> dict[str, Any]:
     return result
 
 
-def _prepare(image: bytes, index: int | None, region: Region | None) -> bytes:
-    """Crop (and/or pick a single frame of) an image; returns PNG bytes."""
+def _crop(img: Image.Image, region: Region | None) -> bytes:
+    frame = img.convert("RGB")
+    if region is not None:
+        x, y, w, h = region
+        frame = frame.crop((x, y, x + w, y + h))
+    buf = io.BytesIO()
+    frame.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _prepare(image: bytes, index: int, region: Region | None) -> bytes:
+    """One frame of an image, optionally cropped, as PNG bytes."""
+    try:
+        with Image.open(io.BytesIO(image)) as img:
+            img.seek(index)
+            return _crop(img, region)
+    except Exception:
+        raise ImageRejected("unsupported_image", "could not decode image") from None
+
+
+def _prepare_all(image: bytes, region: Region | None) -> list[bytes]:
+    """Every frame, each cropped to its own PNG."""
     try:
         with Image.open(io.BytesIO(image)) as img:
             count = getattr(img, "n_frames", 1)
-            indexes = [index] if index is not None else list(range(count))
-            frames: list[Image.Image] = []
-            for i in indexes:
+            if count > MAX_FRAMES:
+                raise ImageRejected("too_large", "too many frames")
+            out: list[bytes] = []
+            for i in range(count):
                 img.seek(i)
-                frame = img.convert("RGB")
-                if region is not None:
-                    x, y, w, h = region
-                    frame = frame.crop((x, y, x + w, y + h))
-                frames.append(frame)
-            buf = io.BytesIO()
-            if len(frames) == 1:
-                frames[0].save(buf, format="PNG")
-            else:
-                frames[0].save(buf, format="PNG", save_all=True, append_images=frames[1:])
-            return buf.getvalue()
+                out.append(_crop(img, region))
+            return out
+    except ImageRejected:
+        raise
     except Exception:
         raise ImageRejected("unsupported_image", "could not decode image") from None
 
@@ -106,8 +120,24 @@ async def _ai(
     index: int | None = None,
     all_frames: bool = False,
 ) -> dict[str, Any]:
-    if region is not None or index is not None:
-        image = await hass.async_add_executor_job(_prepare, image, index, region)
+    """AI read; a region is cropped per frame (never as a multi-frame image)."""
+    if all_frames and region is not None:
+        pngs = await hass.async_add_executor_job(_prepare_all, image, region)
+        frames = [await ai_read(hass, entity_id, png, preset=preset) for png in pngs]
+        return {
+            "frames": frames,
+            "text": "\n\n".join(f["text"] for f in frames),
+            "blocks": [],
+            "width": frames[0]["width"],
+            "height": frames[0]["height"],
+            "ms": sum(f["ms"] for f in frames),
+            "engine": f"ai_task:{entity_id}",
+            "model": None,
+            "preset": preset,
+            "confidence": None,
+        }
+    if not all_frames and (region is not None or index is not None):
+        image = await hass.async_add_executor_job(_prepare, image, index or 0, region)
     return await ai_read(hass, entity_id, image, preset=preset, all_frames=all_frames)
 
 
@@ -127,6 +157,8 @@ async def route_read(
     cfg = settings(entry)
     client = entry.runtime_data.client
 
+    if backend == "local" and client is None:
+        raise CannotConnect("no local App is configured")
     if backend == "ai_task" or client is None:
         if not cfg.ai_entity:
             raise AiUnavailable("no_entity")
@@ -165,7 +197,7 @@ async def route_read(
             ai_result = None
         if ai_result is None:
             raise local_error from None
-        return _label_ai(ai_result, ROUTED_AI)
+        return _label_ai(ai_result, ROUTED_BOTH)
 
     _label_local_result(local)
     if backend != "auto" or not cfg.ai_entity:
@@ -176,7 +208,7 @@ async def route_read(
         return local
     try:
         result = await _ai(hass, cfg.ai_entity, image, preset=preset, region=region)
-    except AiUnavailable:
+    except (AiUnavailable, ImageRejected):
         return local
     return _label_ai(result, ROUTED_BOTH)
 
@@ -200,11 +232,12 @@ async def _route_frames(
             replacement = await _ai(
                 hass, entity_id, image, preset=preset, region=region, index=index
             )
-        except AiUnavailable:
+        except (AiUnavailable, ImageRejected):
             continue
         frames[index] = _label_ai(replacement, ROUTED_BOTH)
         fell_back = True
     if fell_back:
         local["routed"] = ROUTED_BOTH
         local["text"] = "\n\n".join(f.get("text", "") for f in frames)
+        local["confidence"] = None  # some frames were served by AI
     return local

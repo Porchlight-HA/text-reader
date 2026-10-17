@@ -219,7 +219,7 @@ async def test_auto_local_down_goes_ai(hass):
         entry = _entry(client, options={"ai_entity": AI_ENTITY})
         with patch.object(router, "ai_read", new=AsyncMock(return_value=_ai())):
             result = await _route(hass, entry)
-        assert result["routed"] == "ai_task"
+        assert result["routed"] == "local→ai_task"
 
 
 async def test_auto_local_down_and_ai_unavailable_raises_local_error(hass):
@@ -281,6 +281,8 @@ async def test_auto_all_frames_routes_weak_frames_only(hass):
     assert ai_mock.await_args.kwargs.get("all_frames", False) is False
     sent = Image.open(io.BytesIO(ai_mock.await_args.args[2]))
     assert sent.format == "PNG"
+    assert 30 <= sent.convert("RGB").getpixel((0, 0))[0] <= 50  # frame 1's colour, not 0 or 80
+    assert result["confidence"] is None
     assert [f["text"] for f in result["frames"]] == ["one", "two fixed", "three"]
     assert [f["routed"] for f in result["frames"]] == ["local", "local→ai_task", "local"]
     assert result["routed"] == "local→ai_task"
@@ -316,8 +318,9 @@ async def test_auto_all_frames_local_down_goes_ai_all_frames(hass):
     with patch.object(router, "ai_read", new=AsyncMock(return_value=ai_res)) as ai:
         result = await _route(hass, entry, image=_img(frames=2), all_frames=True)
     assert ai.await_args.kwargs["all_frames"] is True
-    assert result["routed"] == "ai_task"
-    assert [f["routed"] for f in result["frames"]] == ["ai_task", "ai_task"]
+    assert result["routed"] == "local→ai_task"
+    assert [f["routed"] for f in result["frames"]] == ["local→ai_task", "local→ai_task"]
+    assert result["confidence"] is None
 
 
 async def test_ai_error_not_chained_in_weak_fallback(hass):
@@ -346,3 +349,90 @@ async def test_ai_only_entry_sets_up_and_unloads(hass):
     assert entry.runtime_data.coordinator is None
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert entry.state is ConfigEntryState.NOT_LOADED
+
+
+def _same_in_region_gif() -> bytes:
+    """Three frames identical inside (0, 0, 5, 5); they differ only outside it."""
+    imgs = []
+    for i in range(3):
+        img = Image.new("RGB", (20, 10), (0, 0, 0))
+        img.putpixel((15, 5), (i * 50 + 50, 0, 0))
+        imgs.append(img)
+    buf = io.BytesIO()
+    imgs[0].save(buf, format="GIF", save_all=True, append_images=imgs[1:])
+    return buf.getvalue()
+
+
+async def test_ai_all_frames_region_identical_crops_one_call_per_frame(hass):
+    entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
+    ai_mock = AsyncMock(side_effect=lambda *a, **k: _ai(f"t{ai_mock.await_count}"))
+    with patch.object(router, "ai_read", new=ai_mock):
+        result = await _route(
+            hass, entry, image=_same_in_region_gif(), backend="ai_task",
+            all_frames=True, region=(0, 0, 5, 5),
+        )
+    assert ai_mock.await_count == 3
+    for call in ai_mock.await_args_list:
+        sent = Image.open(io.BytesIO(call.args[2]))
+        assert sent.format == "PNG" and sent.size == (5, 5)
+        assert getattr(sent, "n_frames", 1) == 1
+    assert len(result["frames"]) == 3
+    assert result["routed"] == "ai_task"
+    assert result["confidence"] is None
+
+
+async def test_auto_weak_single_ai_image_rejected_keeps_local(hass):
+    client = _client(_local(conf=0.2))
+    entry = _entry(client, options={"ai_entity": AI_ENTITY})
+    err = ImageRejected("unsupported_image", "x")
+    with patch.object(router, "ai_read", new=AsyncMock(side_effect=err)):
+        result = await _route(hass, entry)
+    assert result["routed"] == "local"
+    assert result["text"] == "hello"
+
+
+async def test_auto_weak_frame_ai_image_rejected_keeps_local_frame(hass):
+    frames = [_local("one", 0.1), _local("two")]
+    client = _client({"frames": frames, "text": "one\n\ntwo"})
+    entry = _entry(client, options={"ai_entity": AI_ENTITY})
+    err = ImageRejected("unsupported_image", "x")
+    with patch.object(router, "ai_read", new=AsyncMock(side_effect=err)):
+        result = await _route(hass, entry, image=_img(frames=2), all_frames=True)
+    assert result["routed"] == "local"
+    assert result["frames"][0]["text"] == "one"
+    assert result["confidence"] is not None
+
+
+async def test_explicit_local_without_client_raises(hass):
+    entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
+    with (
+        patch.object(router, "ai_read", new=AsyncMock()) as ai,
+        pytest.raises(CannotConnect),
+    ):
+        await _route(hass, entry, backend="local")
+    ai.assert_not_called()
+
+
+async def test_seam_region_all_frames_through_real_ai_backend(hass):
+    from types import SimpleNamespace as NS
+    from unittest.mock import MagicMock
+
+    from homeassistant.components.ai_task import AITaskEntityFeature
+    from homeassistant.components.ai_task.const import DATA_COMPONENT
+
+    feats = AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
+    component = MagicMock()
+    component.get_entity = lambda eid: NS(supported_features=feats) if eid == AI_ENTITY else None
+    hass.data[DATA_COMPONENT] = component
+    entry = _entry(None, url=False, options={"ai_entity": AI_ENTITY})
+    gen = AsyncMock(return_value=NS(data={"text": "ok"}))
+    with patch("homeassistant.components.ai_task.async_generate_data", new=gen):
+        result = await _route(
+            hass, entry, image=_same_in_region_gif(), backend="ai_task",
+            all_frames=True, region=(0, 0, 5, 5),
+        )
+    assert gen.await_count == 3
+    assert [f["text"] for f in result["frames"]] == ["ok", "ok", "ok"]
+    assert result["text"] == "ok\n\nok\n\nok"
+    assert result["width"] == 5 and result["height"] == 5
+    assert result["routed"] == "ai_task"
