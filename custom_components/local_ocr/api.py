@@ -99,11 +99,11 @@ class LocalOcrClient:
                 except (aiohttp.ContentTypeError, ValueError):
                     body = None
                 retry = resp.headers.get("Retry-After")
-        except ValueError as err:
-            # aiohttp rejects invalid header values; never echo the token.
-            raise Unauthorized("invalid token format") from None
         except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as err:
             raise CannotConnect(str(err) or type(err).__name__) from err
+        except ValueError:
+            # aiohttp rejects invalid header values; never echo the token.
+            raise Unauthorized("invalid token format") from None
 
         if status < 400:
             if not isinstance(body, dict):
@@ -121,7 +121,7 @@ class LocalOcrClient:
                 delay = float(retry) if retry is not None else 5.0
             except ValueError:
                 delay = 5.0
-            if delay != delay or delay in (float("inf"), float("-inf")):  # nan/inf
+            if delay != delay or delay == float("inf"):  # nan or +inf
                 delay = 5.0
             raise Busy(max(delay, 0.0))
         raise ServerError(message or code or f"HTTP {status}")

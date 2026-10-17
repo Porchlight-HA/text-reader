@@ -1,10 +1,15 @@
 """Tests for the Local OCR API client."""
 
 import ast
+import re
 from pathlib import Path
 
 import aiohttp
 import pytest
+from unittest.mock import patch
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMockResponse,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.local_ocr.api import (
@@ -152,7 +157,7 @@ async def test_health_missing_keys(hass, aioclient_mock):
 
 @pytest.mark.parametrize(
     ("header", "expected"),
-    [("nan", 5.0), ("inf", 5.0), ("-3", 0.0), ("abc", 5.0), ("7", 7.0)],
+    [("nan", 5.0), ("inf", 5.0), ("-inf", 0.0), ("-3", 0.0), ("abc", 5.0), ("7", 7.0)],
 )
 async def test_busy_retry_after_sanitised(hass, aioclient_mock, header, expected):
     aioclient_mock.post(
@@ -179,6 +184,27 @@ async def test_invalid_header_never_leaks_token(hass, aioclient_mock):
         await LocalOcrClient(async_get_clientsession(hass), URL, secret).info()
     assert "sekrit" not in str(err.value)
     assert "sekrit" not in repr(err.value)
+
+
+async def test_malformed_url_is_cannot_connect(hass, aioclient_mock):
+    # The mock skips aiohttp's URL validation, so raise what aiohttp raises.
+    aioclient_mock.get(
+        re.compile(r".*bad host.*"), exc=aiohttp.InvalidURL("http://bad host:8738")
+    )
+    client = LocalOcrClient(async_get_clientsession(hass), "http://bad host:8738", "t")
+    with pytest.raises(CannotConnect):
+        await client.info()
+
+
+async def test_body_read_payload_error_is_cannot_connect(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/info", json={"version": "1"})
+    with patch.object(
+        AiohttpClientMockResponse,
+        "json",
+        side_effect=aiohttp.ClientPayloadError("truncated"),
+    ):
+        with pytest.raises(CannotConnect):
+            await _client(hass).info()
 
 
 def test_api_module_has_no_ha_imports():
