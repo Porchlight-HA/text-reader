@@ -18,6 +18,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.network import get_url
 
@@ -201,13 +202,19 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
     start = monotonic()
     while True:
         try:
-            return await client.read(
+            result = await client.read(
                 image,
                 preset=preset,
                 min_confidence=min_conf,
                 region=region,
                 all_frames=data.get("all_frames", False),
             )
+            ms = result.get("ms") if isinstance(result, dict) else None
+            if not isinstance(ms, (int, float)):
+                ms = (monotonic() - start) * 1000
+            entry.runtime_data.last_duration_ms = round(ms)
+            async_dispatcher_send(hass, f"{DOMAIN}_duration_updated")
+            return result
         except Busy as busy:
             delay = max(busy.retry_after, 0.5)
             if monotonic() - start + delay > timeout:
@@ -223,7 +230,12 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
                 translation_key="image_rejected",
                 translation_placeholders={"code": err.code},
             ) from None
-        except (CannotConnect, Unauthorized):
+        except Unauthorized:
+            entry.async_start_reauth(hass)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="app_unavailable"
+            ) from None
+        except CannotConnect:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="app_unavailable"
             ) from None

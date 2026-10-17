@@ -144,5 +144,49 @@
         }
       }
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "status": {
+        "name": "Status"
+      }
+    },
+    "sensor": {
+      "last_duration": {
+        "name": "Last duration"
+      }
+    }
+  },
+  "issues": {
+    "app_not_running": {
+      "title": "The Local OCR app is stopped",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Start the Local OCR app",
+            "description": "The Local OCR app is stopped. Select Submit to start it."
+          }
+        },
+        "abort": {
+          "cannot_start": "The app couldn't be started. Start it from the Local OCR app page."
+        }
+      }
+    },
+    "app_not_running_unmanaged": {
+      "title": "Local OCR isn't reachable",
+      "description": "Start the local-ocr container (docker start local-ocr)."
+    },
+    "app_outdated": {
+      "title": "The Local OCR app is too old",
+      "description": "The Local OCR app is older than this integration needs. Update the app."
+    },
+    "model_failed": {
+      "title": "The Local OCR model failed to load",
+      "description": "The app is running but its OCR model failed to load: {detail}. Restart the app."
+    },
+    "low_memory": {
+      "title": "The Local OCR app is low on memory",
+      "description": "The app reports it is low on memory. Give it more memory or stop other apps."
+    }
   }
 }

@@ -66,7 +66,7 @@ async def test_hassio_discovery_creates_entry_after_test(hass, aioclient_mock):
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Local OCR"
-    assert result["data"] == {"url": "http://local-ocr:8738", "token": TOKEN, "managed": True}
+    assert result["data"] == {"url": "http://local-ocr:8738", "token": TOKEN, "managed": True, "slug": "local_ocr"}
     assert result["options"] == {"preset": "text", "min_confidence": 0.5, "timeout": 30}
     assert result["result"].unique_id == DOMAIN
 
@@ -86,6 +86,7 @@ async def test_hassio_rediscovery_updates_token_and_url(hass, aioclient_mock):
     assert result["reason"] == "already_configured"
     assert entry.data["url"] == "http://new-host:8738"
     assert entry.data["token"] == "new"
+    assert entry.data["slug"] == "local_ocr"
     assert setup.call_count == 2  # entry reloaded
 
 
@@ -269,6 +270,7 @@ async def test_single_instance_abort(hass):
 
 
 async def test_setup_entry(hass, aioclient_mock):
+    mock_server(aioclient_mock, URL)
     entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
                             data={"url": URL, "token": TOKEN, "managed": False},
                             options={"timeout": 12})
