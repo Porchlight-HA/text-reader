@@ -7,10 +7,11 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -28,6 +29,7 @@ from .api import (
     LocalOcrClient,
     LocalOcrError,
     ServerError,
+    Timeout,
     Unauthorized,
 )
 from .const import DEFAULT_PORT, DOMAIN, MIN_API, SAMPLE_PATH
@@ -79,10 +81,17 @@ async def _async_check(
         result = await client.read(sample, preset="envelope")
     except CannotConnect as err:
         raise _CheckFailed("cannot_connect") from err
+    except Timeout as err:
+        raise _CheckFailed("timeout") from err
     except Unauthorized as err:
         raise _CheckFailed("invalid_auth") from err
     except ServerError as err:
-        raise _CheckFailed("model_failed") from err
+        if err.code == "model_error" or str(err).lower().startswith("out of memory"):
+            raise _CheckFailed("model_failed") from err
+        if err.code == "internal_error":
+            raise _CheckFailed("unknown") from err
+        # A 404, an HTML page or JSON without our fields: something else answers at this address.
+        raise _CheckFailed("not_local_ocr") from err
     except LocalOcrError as err:
         _LOGGER.warning("Local OCR test failed: %s", type(err).__name__)
         raise _CheckFailed("unknown") from err
@@ -95,8 +104,11 @@ async def _async_check(
     fields = result.get("fields") or {}
     lines = (fields.get("addressee") or {}).get("lines") or []
     markers = fields.get("markers") or []
+    blocks = [b for b in result.get("blocks") or [] if isinstance(b, dict)]
+    # Count visual lines (blocks sharing the server's `line` index), not blocks.
+    line_ids = {b["line"] for b in blocks if isinstance(b.get("line"), int)}
     return {
-        "lines": str(len(result.get("blocks") or [])),
+        "lines": str(len(line_ids) if line_ids else len(blocks)),
         "seconds": f"{(result.get('ms') or 0) / 1000:.1f}",
         "preview": " / ".join(lines[:3]) or "none",
         "markers": ", ".join(markers) or "none",
@@ -129,10 +141,20 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         self._managed = True
         self._slug = discovery_info.slug
         await self.async_set_unique_id(DOMAIN)
-        self._abort_if_unique_id_configured(
-            updates={"url": self._url, "token": self._token, "slug": self._slug}
-        )
+        updates = {"url": self._url, "token": self._token, "slug": self._slug}
+        self._abort_stale_reauth(updates)
+        self._abort_if_unique_id_configured(updates=updates)
         return await self.async_step_hassio_confirm()
+
+    def _abort_stale_reauth(self, updates: dict[str, Any]) -> None:
+        """Discovery is about to update the entry (new token or URL): any open reauth flow is now moot."""
+        entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, DOMAIN)
+        if entry is None or all(entry.data.get(k) == v for k, v in updates.items()):
+            return
+        for flow in self.hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH, "entry_id": entry.entry_id}
+        ):
+            self.hass.config_entries.flow.async_abort(flow["flow_id"])
 
     async def async_step_hassio_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -210,18 +232,44 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
             self._placeholders = await _async_check(self.hass, self._url, self._token)
         except _CheckFailed as err:
             errors["base"] = err.code
+            # A neutral form that claims no result; Submit retries the test.
+            return self.async_show_form(step_id="test_failed", errors=errors)
         return self.async_show_form(
-            step_id="test",
-            errors=errors,
-            description_placeholders=self._placeholders or {
-                "lines": "0", "seconds": "0.0", "preview": "none", "markers": "none"
-            },
+            step_id="test", description_placeholders=self._placeholders
         )
+
+    async def async_step_test_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self.async_step_test()
 
     # --- reauth / reconfigure -------------------------------------------
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        if entry_data.get("managed"):
+            return await self.async_step_reauth_managed()
         return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_managed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """App entries: the token lives in the App's /data, so the user can't type it.
+
+        Restarting the App re-sends discovery with its current token, which updates the entry (and aborts
+        this flow). Submit re-checks with whatever token the entry has now.
+        """
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                await _async_check(
+                    self.hass, entry.data["url"], entry.data.get("token"), read_sample=False
+                )
+            except _CheckFailed as err:
+                errors["base"] = err.code
+            else:
+                return self.async_update_reload_and_abort(entry, data_updates={})
+        return self.async_show_form(step_id="reauth_managed", errors=errors)
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -268,8 +316,8 @@ class LocalOcrConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class LocalOcrOptionsFlow(OptionsFlow):
-    """Options: default preset, confidence, timeout."""
+class LocalOcrOptionsFlow(OptionsFlowWithReload):
+    """Options: default preset, confidence, timeout. Saving reloads the entry so changes take effect."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

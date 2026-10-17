@@ -19,6 +19,7 @@ from custom_components.local_ocr.api import (
     Info,
     LocalOcrClient,
     ServerError,
+    Timeout,
     Unauthorized,
 )
 
@@ -127,8 +128,9 @@ async def test_server_error_keeps_message(hass, aioclient_mock):
         status=500,
         json={"error": "model_error", "message": "out of memory: boom"},
     )
-    with pytest.raises(ServerError, match="out of memory"):
+    with pytest.raises(ServerError, match="out of memory") as err:
         await _client(hass).read(b"x")
+    assert err.value.code == "model_error"
 
 
 async def test_connection_error(hass, aioclient_mock):
@@ -139,8 +141,63 @@ async def test_connection_error(hass, aioclient_mock):
 
 async def test_timeout(hass, aioclient_mock):
     aioclient_mock.get(f"{URL}/v1/health", exc=TimeoutError())
+    with pytest.raises(Timeout):
+        await _client(hass).health()
+
+
+async def test_read_timeout_is_timeout_not_cannot_connect(hass, aioclient_mock):
+    aioclient_mock.post(f"{URL}/v1/read", exc=aiohttp.SocketTimeoutError())
+    with pytest.raises(Timeout) as err:
+        await _client(hass).read(b"x")
+    assert not isinstance(err.value, CannotConnect)
+
+
+async def test_connect_timeout_is_cannot_connect(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/health", exc=aiohttp.ConnectionTimeoutError())
     with pytest.raises(CannotConnect):
         await _client(hass).health()
+
+
+async def test_read_timeout_override(hass):
+    session = async_get_clientsession(hass)
+    client = LocalOcrClient(session, URL, None, 30)
+    seen = []
+
+    class _Resp:
+        status = 200
+        headers: dict = {}
+
+        async def json(self, content_type=None):
+            return {"text": ""}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    def fake_request(method, url, **kw):
+        seen.append(kw["timeout"].total)
+        return _Resp()
+
+    with patch.object(session, "request", fake_request):
+        await client.read(b"x")
+        await client.read(b"x", timeout=180)
+    assert seen == [30, 180]
+
+
+async def test_health_memory(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/health", json={
+        "status": "ok", "model_state": "ready", "detail": None,
+        "memory": {"oom_kills": 2, "last_oom": "2026-10-17T10:00:00+00:00"}})
+    h = await _client(hass).health()
+    assert h.oom_kills == 2 and h.last_oom == "2026-10-17T10:00:00+00:00"
+
+
+async def test_health_without_memory_is_old_server(hass, aioclient_mock):
+    aioclient_mock.get(f"{URL}/v1/health", json={"status": "ok", "model_state": "ready", "detail": None})
+    h = await _client(hass).health()
+    assert h.oom_kills is None and h.last_oom is None
 
 
 async def test_info_missing_required_keys(hass, aioclient_mock):

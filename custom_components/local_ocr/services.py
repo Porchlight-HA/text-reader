@@ -26,6 +26,8 @@ from .api import (
     CannotConnect,
     ImageRejected,
     LocalOcrError,
+    ServerError,
+    Timeout,
     Unauthorized,
 )
 from .const import DOMAIN, SIGNAL_DURATION_UPDATED
@@ -34,6 +36,10 @@ from .data import LocalOcrConfigEntry
 SERVICE_READ_IMAGE = "read_image"
 PRESETS = ["text", "envelope", "meter", "label"]
 SOURCES = ("image_entity", "camera_entity", "file_path", "media_content_id")
+# Reading every frame of an animation takes about one single read per frame (2.5-4 s each on a Pi 4).
+ALL_FRAMES_TIMEOUT = 180
+# Server rejection codes with their own plain-language message; other codes use image_rejected.
+REJECTION_KEYS = ("too_large", "unsupported_image", "bad_request", "unsupported_lang")
 
 REGION_SCHEMA = vol.Schema(
     {
@@ -142,10 +148,16 @@ async def _load_image(hass: HomeAssistant, call_data: dict[str, Any]) -> bytes:
 
 
 def _image_size(data: bytes) -> tuple[int, int]:
+    """The image's size as the server sees it: after EXIF rotation (orientations 5-8 swap w and h)."""
     from PIL import Image
 
     with Image.open(BytesIO(data)) as img:
-        return img.size
+        width, height = img.size
+        try:
+            orientation = int(img.getexif().get(0x0112, 1))
+        except (TypeError, ValueError, OSError, SyntaxError):
+            orientation = 1
+    return (height, width) if orientation in (5, 6, 7, 8) else (width, height)
 
 
 def _invalid_region() -> ServiceValidationError:
@@ -166,9 +178,7 @@ async def _region_px(
             width, height = await hass.async_add_executor_job(_image_size, image)
         except Exception as err:  # noqa: BLE001 - PIL raises many types
             raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="image_rejected",
-                translation_placeholders={"code": "unsupported_image"},
+                translation_domain=DOMAIN, translation_key="unsupported_image"
             ) from err
         px = (round(x * width), round(y * height), round(w * width), round(h * height))
     else:
@@ -190,7 +200,9 @@ async def _read_image(hass: HomeAssistant, call: ServiceCall) -> ServiceResponse
     options = entry.options
     preset = data.get("preset") or options.get("preset", "text")
     min_conf = data.get("min_confidence", options.get("min_confidence", 0.5))
-    timeout = options.get("timeout", 30)
+    timeout = float(options.get("timeout", 30))
+    if data.get("all_frames", False):
+        timeout = max(timeout, ALL_FRAMES_TIMEOUT)
 
     started = monotonic()
     image = await _load_image(hass, data)
@@ -248,6 +260,11 @@ async def _read_with_retry(
 ) -> ServiceResponse:
     client = entry.runtime_data.client
     start = monotonic()
+    timed_out = HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key="timeout",
+        translation_placeholders={"timeout": f"{timeout:g}"},
+    )
     while True:
         try:
             result = await client.read(
@@ -256,6 +273,7 @@ async def _read_with_retry(
                 min_confidence=min_conf,
                 region=region,
                 all_frames=all_frames,
+                timeout=timeout,
             )
             ms = result.get("ms") if isinstance(result, dict) else None
             if not isinstance(ms, (int, float)):
@@ -266,13 +284,15 @@ async def _read_with_retry(
         except Busy as busy:
             delay = max(busy.retry_after, 0.5)
             if monotonic() - start + delay > timeout:
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="timeout",
-                    translation_placeholders={"timeout": f"{timeout:g}"},
-                ) from None
+                raise timed_out from None
             await sleep(delay)
+        except Timeout:
+            raise timed_out from None
         except ImageRejected as err:
+            if err.code in REJECTION_KEYS:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN, translation_key=err.code
+                ) from None
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="image_rejected",
@@ -281,11 +301,18 @@ async def _read_with_retry(
         except Unauthorized:
             entry.async_start_reauth(hass)
             raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="app_unavailable"
+                translation_domain=DOMAIN, translation_key="auth_failed"
             ) from None
         except CannotConnect:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="app_unavailable"
+            ) from None
+        except ServerError as err:
+            # The server's own error text (never recognised text).
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="server_error",
+                translation_placeholders={"message": str(err)},
             ) from None
         except LocalOcrError as err:
             raise HomeAssistantError(str(err)) from None

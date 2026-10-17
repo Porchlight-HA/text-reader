@@ -11,7 +11,7 @@ from homeassistant.setup import async_setup_component
 from PIL import Image
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.local_ocr.api import Busy, LocalOcrClient
+from custom_components.local_ocr.api import Busy, LocalOcrClient, Timeout
 from custom_components.local_ocr.const import DOMAIN
 
 URL = "http://ocr.test:8738"
@@ -27,7 +27,8 @@ def _png(w=200, h=100) -> bytes:
 @pytest.fixture
 async def entry(hass, aioclient_mock):
     aioclient_mock.get(f"{URL}/v1/info", json={"version": "0.1.0", "api": 1, "arch": "amd64", "engine": "rapidocr"})
-    aioclient_mock.get(f"{URL}/v1/health", json={"status": "ok", "model_state": "loaded"})
+    aioclient_mock.get(f"{URL}/v1/health", json={"status": "ok", "model_state": "ready", "detail": None,
+                                                  "memory": {"oom_kills": 0, "last_oom": None}})
     aioclient_mock.post(f"{URL}/v1/read", json=RESULT)
     e = MockConfigEntry(
         domain=DOMAIN, unique_id=DOMAIN, title="Local OCR",
@@ -114,8 +115,86 @@ async def test_server_415_maps_image_rejected(hass, entry, aioclient_mock, tmp_p
     hass.config.allowlist_external_dirs = {str(tmp_path)}
     with pytest.raises(HomeAssistantError) as err:
         await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "unsupported_image"
+
+
+@pytest.mark.parametrize(("status", "code", "key"), [
+    (413, "too_large", "too_large"),
+    (415, "unsupported_image", "unsupported_image"),
+    (400, "bad_request", "bad_request"),
+    (400, "unsupported_lang", "unsupported_lang"),
+])
+async def test_image_rejected_codes_are_plain_language(hass, entry, aioclient_mock, tmp_path, status, code, key):
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{URL}/v1/read", status=status, json={"error": code, "message": "x"})
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=str(p))
+    assert err.value.translation_key == key
+    assert key in _exception_strings()
+
+
+async def test_unknown_rejection_code_keeps_generic_message(hass, entry, aioclient_mock, tmp_path):
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{URL}/v1/read", status=400, json={"error": "something_new", "message": "x"})
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=str(p))
     assert err.value.translation_key == "image_rejected"
-    assert err.value.translation_placeholders == {"code": "unsupported_image"}
+    assert err.value.translation_placeholders == {"code": "something_new"}
+
+
+def _exception_strings():
+    import json
+    from pathlib import Path
+
+    import custom_components.local_ocr as pkg
+    return json.loads((Path(pkg.__file__).parent / "strings.json").read_text())["exceptions"]
+
+
+async def test_timeout_maps_to_timeout_message(hass, entry, tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with patch.object(LocalOcrClient, "read", AsyncMock(side_effect=Timeout("TimeoutError"))):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "timeout"
+    assert err.value.translation_placeholders == {"timeout": "30"}
+
+
+async def test_all_frames_uses_longer_timeout(hass, entry, tmp_path):
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    read = AsyncMock(return_value=RESULT)
+    with patch.object(LocalOcrClient, "read", read):
+        await _call(hass, file_path=str(p))
+        await _call(hass, file_path=str(p), all_frames=True)
+    assert read.call_args_list[0].kwargs["timeout"] == 30
+    assert read.call_args_list[1].kwargs["timeout"] == 180
+    with patch.object(LocalOcrClient, "read", AsyncMock(side_effect=Timeout("x"))):
+        with pytest.raises(HomeAssistantError) as err:
+            await _call(hass, file_path=str(p), all_frames=True)
+    assert err.value.translation_placeholders == {"timeout": "180"}
+
+
+async def test_server_error_is_translated_with_server_message(hass, entry, aioclient_mock, tmp_path):
+    aioclient_mock.clear_requests()
+    aioclient_mock.post(f"{URL}/v1/read", status=500,
+                        json={"error": "model_error", "message": "out of memory: x"})
+    p = tmp_path / "a.png"
+    p.write_bytes(_png())
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    with pytest.raises(HomeAssistantError) as err:
+        await _call(hass, file_path=str(p))
+    assert err.value.translation_key == "server_error"
+    assert err.value.translation_placeholders == {"message": "out of memory: x"}
+    assert "server_error" in _exception_strings()
 
 
 async def test_busy_retries_then_succeeds(hass, entry, tmp_path):
@@ -243,6 +322,28 @@ async def test_region_fraction_converted_to_px(hass, entry, aioclient_mock, tmp_
     await _call(hass, file_path=str(p), region={"x": 0.5, "y": 0.0, "w": 0.5, "h": 1})
     body = aioclient_mock.mock_calls[-1][2]
     assert _field(body, "region") == "100,0,100,100"
+
+
+def _jpeg_with_orientation(w, h, orientation):
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = BytesIO()
+    Image.new("RGB", (w, h), "white").save(buf, "JPEG", exif=exif.tobytes())
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(("orientation", "expected"), [
+    (1, "100,0,100,100"),   # stored 200x100, shown 200x100
+    (6, "50,0,50,200"),     # stored 200x100, shown rotated: 100x200
+    (8, "50,0,50,200"),
+    (3, "100,0,100,100"),   # 180 degrees: no swap
+])
+async def test_region_fraction_uses_exif_rotated_size(hass, entry, aioclient_mock, tmp_path, orientation, expected):
+    p = tmp_path / "a.jpg"
+    p.write_bytes(_jpeg_with_orientation(200, 100, orientation))
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
+    await _call(hass, file_path=str(p), region={"x": 0.5, "y": 0.0, "w": 0.5, "h": 1})
+    assert _field(aioclient_mock.mock_calls[-1][2], "region") == expected
 
 
 async def test_region_px_passthrough(hass, entry, aioclient_mock, tmp_path):

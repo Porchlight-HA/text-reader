@@ -25,12 +25,20 @@
         "title": "Test the connection",
         "description": "Read {lines} lines in {seconds} s.\nAddressee: {preview}\nMarkers: {markers}"
       },
+      "test_failed": {
+        "title": "Test the connection",
+        "description": "The connection test didn't pass. Fix the problem shown below, then select Submit to try again."
+      },
       "reauth_confirm": {
         "title": "Access token needed",
         "description": "The Local OCR server rejected the access token. Enter the current one.",
         "data": {
           "token": "Access token"
         }
+      },
+      "reauth_managed": {
+        "title": "Restart the Local OCR app",
+        "description": "Local OCR rejected the saved access token. Restart the Local OCR app (Settings > Apps > Local OCR > Restart): when it starts it gives Home Assistant its current token. Then select Submit."
       },
       "reconfigure": {
         "title": "Reconfigure Local OCR",
@@ -41,6 +49,8 @@
     },
     "error": {
       "cannot_connect": "Can't reach the Local OCR app. Make sure it is installed and started.",
+      "timeout": "Local OCR didn't answer in time. Try again in a moment.",
+      "not_local_ocr": "That address doesn't look like a Local OCR server.",
       "invalid_auth": "The access token was rejected.",
       "app_outdated": "The Local OCR app is too old for this integration. Update the app.",
       "model_failed": "The app is running but its OCR model failed to load. Restart the app.",
@@ -91,11 +101,29 @@
     "image_rejected": {
       "message": "The image couldn't be read ({code})."
     },
+    "too_large": {
+      "message": "The image is too large (max 10 MB, 40 megapixels)."
+    },
+    "unsupported_image": {
+      "message": "The file isn't an image Local OCR can read."
+    },
+    "bad_request": {
+      "message": "The request was invalid (check region/frame)."
+    },
+    "unsupported_lang": {
+      "message": "That language isn't supported."
+    },
     "app_unavailable": {
       "message": "The Local OCR app isn't running."
     },
+    "auth_failed": {
+      "message": "Local OCR rejected the access token. Open Settings > Devices & services to re-authenticate."
+    },
     "timeout": {
       "message": "Local OCR didn't answer within {timeout} s."
+    },
+    "server_error": {
+      "message": "Local OCR hit an error: {message}"
     },
     "invalid_region": {
       "message": "The region must have non-negative x and y, a positive width and height, and use either all fractions (0–1) or all pixels."
@@ -186,7 +214,7 @@
     },
     "low_memory": {
       "title": "The Local OCR app is low on memory",
-      "description": "The app reports it is low on memory. Give it more memory or stop other apps."
+      "description": "The Local OCR app ran out of memory while reading images. Close other apps, or lower max_side in the Local OCR app's options."
     }
   }
 }
