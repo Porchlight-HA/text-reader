@@ -243,16 +243,20 @@ def _to_rgb(img: Image.Image) -> Image.Image:
 
 
 def _strip_metadata(img: Image.Image, fmt: str) -> bytes:
-    """Re-save a pass-through image without EXIF (which can carry GPS), text or comments.
+    """Re-encode a pass-through image without EXIF (which can carry GPS), text, XMP or comments.
 
-    Pixels are kept: JPEG reuses its quantisation tables ("keep"), PNG is lossless and WEBP is
-    saved lossless. Only the ICC colour profile (if any) is carried over.
+    JPEG is re-encoded at the source quality (`quality="keep"`) without metadata: not
+    byte-identical, and progressive becomes baseline. PNG and WEBP are saved lossless. The ICC
+    colour profile (not personal data) is carried over.
     """
+    icc = img.info.get("icc_profile")
     buf = io.BytesIO()
     if fmt == "JPEG":
-        img.save(buf, format="JPEG", quality="keep", exif=b"", comment=b"")
+        img.save(
+            buf, format="JPEG", quality="keep", exif=b"", comment=b"", icc_profile=icc
+        )
     elif fmt == "WEBP":
-        img.save(buf, format="WEBP", lossless=True, exif=b"", xmp=b"")
+        img.save(buf, format="WEBP", lossless=True, exif=b"", xmp=b"", icc_profile=icc)
     else:
         img.save(buf, format="PNG")
     return buf.getvalue()

@@ -347,7 +347,7 @@ async def test_ai_animated_gif_sends_frame_zero_only(hass):
     assert (out["width"], out["height"]) == (20, 10)
 
 
-async def test_ai_plain_image_passes_through_pixels_unchanged(hass):
+async def test_ai_plain_image_is_reencoded_at_source_quality_without_metadata(hass):
     _entity(hass)
     buf = io.BytesIO()
     Image.new("RGB", (30, 20), "white").save(buf, "JPEG")
@@ -365,6 +365,12 @@ def _gps_exif() -> Image.Exif:
     return exif
 
 
+def _icc() -> bytes:
+    from PIL import ImageCms
+
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+
 def _no_metadata(data: bytes) -> None:
     img = Image.open(io.BytesIO(data))
     assert len(img.getexif()) == 0 and not img.getexif().get_ifd(0x8825)
@@ -374,7 +380,8 @@ def _no_metadata(data: bytes) -> None:
 async def test_ai_jpeg_pass_through_strips_exif_gps(hass):
     _entity(hass)
     buf = io.BytesIO()
-    Image.new("RGB", (30, 20), "white").save(buf, "JPEG", exif=_gps_exif())
+    icc = _icc()
+    Image.new("RGB", (30, 20), "white").save(buf, "JPEG", exif=_gps_exif(), icc_profile=icc)
     assert Image.open(io.BytesIO(buf.getvalue())).getexif().get_ifd(0x8825)  # fixture has GPS
     sent: list = []
     with patch(PATCH, _capture(hass, sent)):
@@ -382,6 +389,7 @@ async def test_ai_jpeg_pass_through_strips_exif_gps(hass):
     data, mime = sent[0]
     assert mime == "image/jpeg"
     _no_metadata(data)
+    assert Image.open(io.BytesIO(data)).info.get("icc_profile") == icc
 
 
 async def test_ai_png_and_webp_pass_through_strip_metadata(hass):
@@ -391,9 +399,12 @@ async def test_ai_png_and_webp_pass_through_strip_metadata(hass):
     png = io.BytesIO()
     info = PngImagePlugin.PngInfo()
     info.add_text("Comment", "SecretCam")
+    info.add_itxt("XML:com.adobe.xmp", "<x:xmpmeta>SecretCam</x:xmpmeta>")
     Image.new("RGB", (30, 20), "white").save(png, "PNG", pnginfo=info, exif=_gps_exif())
     webp = io.BytesIO()
-    Image.new("RGB", (30, 20), "white").save(webp, "WEBP", exif=_gps_exif())
+    Image.new("RGB", (30, 20), "white").save(
+        webp, "WEBP", exif=_gps_exif(), xmp=b"<x:xmpmeta>SecretCam</x:xmpmeta>")
+    assert b"XMP " in webp.getvalue()  # fixture has XMP
     for src, mime in ((png.getvalue(), "image/png"), (webp.getvalue(), "image/webp")):
         sent: list = []
         with patch(PATCH, _capture(hass, sent)):
@@ -402,6 +413,7 @@ async def test_ai_png_and_webp_pass_through_strip_metadata(hass):
         assert got == mime
         _no_metadata(data)
         assert not Image.open(io.BytesIO(data)).info.get("Comment")
+        assert b"xmpmeta" not in data and b"XMP" not in data and b"iTXt" not in data
 
 
 async def test_ai_large_photo_reencoded_as_jpeg(hass):
