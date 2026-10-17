@@ -3,3 +3,6 @@ pytest-cov
 PyTurboJPEG
 ruff==0.17.1
 mypy==2.4.0
+hassil==3.12.1
+home-assistant-intents==2026.10.6
+gazetteer-matcher==1.1.0
