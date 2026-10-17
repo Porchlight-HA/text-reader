@@ -100,10 +100,17 @@ class TextReaderCoordinator(DataUpdateCoordinator[Status]):
             self._ai_unavailable = 0
             return None
         state = self.hass.states.get(entity_id)
-        if er.async_get(self.hass).async_get(entity_id) is None and state is None:
+        registered = er.async_get(self.hass).async_get(entity_id)
+        if registered is None and state is None:
             self._ai_unavailable = 0
             return "missing"
-        if state is not None and state.state == STATE_UNAVAILABLE:
+        # Registered but disabled, or registered with no state (not loaded, or its integration
+        # failed): it can't read anything, so it's unavailable, not ok.
+        if (
+            (registered is not None and registered.disabled)
+            or state is None
+            or state.state == STATE_UNAVAILABLE
+        ):
             self._ai_unavailable += 1
             return "unavailable"
         self._ai_unavailable = 0

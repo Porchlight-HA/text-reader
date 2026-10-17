@@ -547,3 +547,38 @@ async def test_local_unsupported_without_ai_aborts_through_manager(hass, aioclie
     assert result["type"].value == "abort" and result["reason"] == "no_ai_assistant"
     assert "backend" not in entry.options
     assert _issue(hass, "local_unsupported_here")  # abort leaves the issue in place
+
+
+# --- final review T7: a disabled (or state-less) registered entity is unavailable -----------
+
+
+async def test_disabled_ai_entity_reads_as_unavailable(hass, aioclient_mock):
+    _ai_entity(hass)
+    await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    assert hass.states.get("binary_sensor.text_reader_status").state == "on"
+    er.async_get(hass).async_update_entity(AI, disabled_by=er.RegistryEntryDisabler.USER)
+    hass.states.async_remove(AI)
+    await _poll(hass)
+    assert hass.states.get("binary_sensor.text_reader_status").state == "off"
+    await _poll(hass, 2)
+    issue = _issue(hass, "ai_entity_unavailable")
+    assert issue is not None and issue.translation_key == "ai_entity_unavailable_only"
+    assert _issue(hass, "ai_entity_missing") is None
+
+
+async def test_registered_ai_entity_without_state_reads_as_unavailable(hass, aioclient_mock):
+    _ai_entity(hass)
+    entry = await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    hass.states.async_remove(AI)  # registry entry kept: not loaded yet, or its integration failed
+    await _poll(hass)
+    assert entry.runtime_data.coordinator.data.ai_state == "unavailable"
+    assert hass.states.get("binary_sensor.text_reader_status").state == "off"
+
+
+async def test_disabled_but_still_reporting_entity_is_unavailable(hass, aioclient_mock):
+    _ai_entity(hass)
+    entry = await _setup_entry(hass, aioclient_mock, {"backend": "ai_task", "ai_entity": AI})
+    er.async_get(hass).async_update_entity(AI, disabled_by=er.RegistryEntryDisabler.USER)
+    hass.states.async_set(AI, "idle")  # a state can linger until the entity is removed
+    await _poll(hass)
+    assert entry.runtime_data.coordinator.data.ai_state == "unavailable"
