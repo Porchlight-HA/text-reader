@@ -53,8 +53,8 @@ The Local OCR **App** keeps its name and slug. Update it to 0.3.0 along with the
    [![Add the Local OCR App repository to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Porchlight-HA/local-ocr)
 2. **Install the App** and start it.
    [![Show the Local OCR App in your Home Assistant.](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=490c75da_local_ocr)
-   <!-- The addon slug 490c75da_local_ocr is computed (sha1 of the lowercased repo URL, first 8 hex chars), not verified on a live Supervisor. -->
-   If the button does not open the App, open Settings > Apps > Install app, then Local OCR. Or skip steps 1 and 2: choosing "On this device" or "Both" in setup tries to install the Local OCR app for you. That needs the App repository (Porchlight-HA/local-ocr) to be public and installable; if it can't, setup shows the manual steps (the My-HA button) and waits for the app. On a Pi 4 the app's first build took about 3 minutes in testing.
+   <!-- The addon slug 490c75da_local_ocr was confirmed on a live Supervisor (Pi 4, HAOS 18.3) on 2026-10-18. -->
+   If the button does not open the App, open Settings > Apps > Install app, then Local OCR. Or skip steps 1 and 2: choosing "On this device" or "Both" in setup installs the Local OCR app for you (it downloads a prebuilt image; on a Pi 4 it took under a minute from choosing "On this device" to a passing sample test). If that can't happen, setup shows the manual steps (the My-HA button) and waits for the app.
 3. **Install the integration via HACS.**
    [![Open the Text Reader repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Porchlight-HA&repository=text-reader&category=integration)
    Restart Home Assistant after the download.
