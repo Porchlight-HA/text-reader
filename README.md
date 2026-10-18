@@ -18,7 +18,7 @@ In "both" mode (`auto`), an image goes to the assistant only if the App is unava
 
 | Setup | Needs | Measured |
 |---|---|---|
-| Local | 64-bit Home Assistant OS or Container (aarch64 or amd64). **2 GB+ RAM** (the App uses 224 MB loaded and about 57 MB idle; Home Assistant plus the App used 1.25 GB on a Pi 4). About 250 MB of disk. A Pi 4 or better. | Pi 4: about 4.2 to 4.6 s per image, a 12-frame GIF in 56 s, a 3 min 19 s on-device build. amd64 laptop: about 0.5 s per image. |
+| Local | 64-bit Home Assistant OS or Container (aarch64 or amd64). **2 GB+ RAM** (the App uses 224 MB loaded and about 57 MB idle; Home Assistant plus the App used 1.25 GB on a Pi 4). About 250 MB of disk. A Pi 4 or better. | Pi 5: about 2.0 to 2.2 s per image, a 12-frame GIF in 26 s. Pi 4: about 4.2 to 4.6 s per image, a 12-frame GIF in 56 s. amd64 laptop: about 0.5 s per image. The App installs as a prebuilt image (under a minute to about 3 minutes, depending on your connection). |
 | AI only | Any Home Assistant 2026.10+ install with an AI Task entity that accepts attachments. No App. | Depends on the assistant. |
 | Both | The local requirements plus an AI Task entity. | Local speed, plus AI only for hard images. |
 
